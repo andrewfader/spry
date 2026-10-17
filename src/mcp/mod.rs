@@ -6,6 +6,7 @@
 //! so an agent can paint while you watch.
 
 pub mod http;
+pub mod resources;
 pub mod tools;
 
 /// Where MCP tools do their work. Most tools edit one studio. Two of them,
@@ -52,13 +53,20 @@ pub fn handle(workspace: &mut impl Workspace, message: &Value) -> Option<Value> 
             // We implement one revision and always answer with it. The
             // spec leaves it to the client whether to carry on.
             "protocolVersion": PROTOCOL_VERSION,
-            "capabilities": { "tools": { "listChanged": false } },
+            "capabilities": { "tools": { "listChanged": false }, "resources": { "listChanged": false, "subscribe": false } },
             "serverInfo": { "name": "spry", "title": "Spry pixel editor", "version": env!("CARGO_PKG_VERSION") },
             "instructions": INSTRUCTIONS,
         })),
         "ping" => Ok(json!({})),
         "tools/list" => Ok(json!({ "tools": tool_list() })),
         "tools/call" => call_tool(workspace, &params),
+        "resources/list" => Ok(resources::list(workspace.studio())),
+        "resources/templates/list" => Ok(resources::templates()),
+        "resources/read" => match params.get("uri").and_then(Value::as_str) {
+            // -32002 is the spec's "resource not found".
+            Some(uri) => resources::read(workspace.studio(), uri).map_err(|message| (-32002, message)),
+            None => Err((-32602, "resources/read needs a `uri`".to_string())),
+        },
         _ => Err((-32601, format!("method `{method}` is not supported"))),
     };
     Some(match outcome {
@@ -150,7 +158,7 @@ mod tests {
 
     #[test]
     fn unknown_methods_are_protocol_errors() {
-        let reply = handle(&mut Studio::new(8, 8), &request(3, "resources/list", json!({}))).unwrap();
+        let reply = handle(&mut Studio::new(8, 8), &request(3, "sampling/createMessage", json!({}))).unwrap();
         assert_eq!(reply["error"]["code"], -32601);
     }
 

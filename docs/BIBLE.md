@@ -237,6 +237,9 @@ file.
   version thumbnails.
 
 ### 15. MCP server (`mcp.rs`)
+- Resources: `spry://document` (the summary) and `spry://frames/{n}.png`
+  (each frame flattened at its real size), listed and read through
+  `resources/list`, `resources/templates/list` and `resources/read`.
 - `spry mcp [file.spry]` speaks MCP (JSON-RPC 2.0, protocol 2025-06-18) over
   stdio.
 - The running app serves the same tools over HTTP at `127.0.0.1:7477/mcp`

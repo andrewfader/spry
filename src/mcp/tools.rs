@@ -663,7 +663,7 @@ fn set_layer(studio: &mut Studio, args: &Value) -> ToolResult {
     Ok(ToolOutput::text(summaries.join("; ")))
 }
 
-fn describe(studio: &Studio) -> String {
+pub(crate) fn describe(studio: &Studio) -> String {
     let editor = &studio.editor;
     let sprite = editor.sprite();
     let layers: Vec<String> = sprite

@@ -275,3 +275,30 @@ fn a_model_can_group_layers_and_set_blend_modes() {
     let refused = scenario.tool("set_layer", json!({ "blend": "sparkle" })).err().unwrap();
     assert!(refused.contains("isn't a blend mode"), "{refused}");
 }
+
+#[test]
+fn the_document_and_its_frames_can_be_read_as_resources() {
+    let mut session = McpSession::launch(&[]);
+    let hello = session.request("initialize", json!({}));
+    assert!(hello["result"]["capabilities"]["resources"].is_object());
+    session.call("fill", json!({ "at": [0, 0], "colour": "#ff004d" }));
+    session.call("add_frame", json!({}));
+
+    let listed = session.request("resources/list", json!({}));
+    let uris: Vec<&str> =
+        listed["result"]["resources"].as_array().unwrap().iter().map(|r| r["uri"].as_str().unwrap()).collect();
+    assert_eq!(uris, vec!["spry://document", "spry://frames/0.png", "spry://frames/1.png"]);
+
+    let summary = session.request("resources/read", json!({ "uri": "spry://document" }));
+    assert!(summary["result"]["contents"][0]["text"].as_str().unwrap().contains("frames: 2"));
+
+    let frame = session.request("resources/read", json!({ "uri": "spry://frames/0.png" }));
+    let blob = frame["result"]["contents"][0]["blob"].as_str().unwrap();
+    let image = spry::io::decode_image(&base64::engine::general_purpose::STANDARD.decode(blob).unwrap()).unwrap();
+    assert_eq!((image.width(), image.get(3, 3)), (32, RED), "exact pixels at the real size");
+
+    let missing = session.request("resources/read", json!({ "uri": "spry://frames/9.png" }));
+    assert_eq!(missing["error"]["code"], -32002);
+    let templates = session.request("resources/templates/list", json!({}));
+    assert_eq!(templates["result"]["resourceTemplates"][0]["uriTemplate"], "spry://frames/{frame}.png");
+}
