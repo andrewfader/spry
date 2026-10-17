@@ -66,6 +66,32 @@ const UNDO_LIMIT: usize = 256;
 
 struct UndoGroup {
     has_snapshot: bool,
+    /// Groups nest (the move tool opens one inside an AI turn), and only
+    /// the outermost `end_undo_group` closes it.
+    depth: u32,
+}
+
+/// Edits that arrive as a continuous stream (a keystroke per note change,
+/// a step per pixel of a dragged duration) and so merge into the previous
+/// undo step while the same stream continues.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum EditStream {
+    Notes,
+    FrameNote(usize),
+    FrameDuration { frame: usize, all_frames: bool },
+}
+
+impl EditStream {
+    fn of(command: &Command, current_frame: usize) -> Option<EditStream> {
+        match *command {
+            Command::SetNotes { .. } => Some(EditStream::Notes),
+            Command::SetFrameNote { frame, .. } => Some(EditStream::FrameNote(frame)),
+            Command::SetFrameDuration { all_frames, .. } => {
+                Some(EditStream::FrameDuration { frame: current_frame, all_frames })
+            }
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -76,6 +102,8 @@ pub enum StrokeKind {
 
 struct Stroke {
     before: Pixels,
+    /// Redo survives a stroke that turns out to change nothing.
+    redo_before: Vec<Snapshot>,
     /// Whether this stroke took its own undo snapshot (it doesn't inside an
     /// undo group that already has one).
     pushed_undo: bool,
@@ -99,6 +127,8 @@ pub struct Editor {
     /// While a group is open, only its first change takes an undo snapshot,
     /// so a whole AI turn (many tool calls) undoes in one step.
     undo_group: Option<UndoGroup>,
+    /// The stream the newest undo step belongs to, if any.
+    last_stream: Option<EditStream>,
     /// Bumped on every change, so views can cache textures cheaply.
     pub revision: u64,
     saved_revision: u64,
@@ -126,6 +156,7 @@ impl Editor {
             redo_stack: Vec::new(),
             stroke: None,
             undo_group: None,
+            last_stream: None,
             revision: 0,
             saved_revision: 0,
             clock: Box::new(system_clock),
@@ -179,11 +210,18 @@ impl Editor {
             Command::SelectFrame { index } if self.floating.is_none() => return self.select_frame(index),
             _ => {}
         }
+        let stream = EditStream::of(&command, self.frame);
         let before = self.snapshot();
         match self.apply(command) {
             Ok(summary) => {
                 if self.snapshot() != before {
-                    self.push_undo(before);
+                    let continues_the_stream = stream.is_some() && stream == self.last_stream && self.can_undo();
+                    if continues_the_stream {
+                        self.redo_stack.clear();
+                    } else {
+                        self.push_undo(before);
+                    }
+                    self.last_stream = stream;
                     self.revision += 1;
                 }
                 Ok(summary)
@@ -217,18 +255,27 @@ impl Editor {
     /// into one undo step.
     pub fn begin_undo_group(&mut self) {
         self.finish_stroke();
-        self.undo_group = Some(UndoGroup { has_snapshot: false });
+        match self.undo_group.as_mut() {
+            Some(group) => group.depth += 1,
+            None => self.undo_group = Some(UndoGroup { has_snapshot: false, depth: 1 }),
+        }
     }
 
     pub fn end_undo_group(&mut self) {
         self.finish_stroke();
-        self.undo_group = None;
+        if let Some(group) = self.undo_group.as_mut() {
+            group.depth -= 1;
+            if group.depth == 0 {
+                self.undo_group = None;
+            }
+        }
     }
 
     /// Records an undo step, unless an open group already has one. Returns
     /// whether a step was recorded.
     fn push_undo(&mut self, snapshot: Snapshot) -> bool {
         self.redo_stack.clear();
+        self.last_stream = None;
         if let Some(group) = self.undo_group.as_mut() {
             if group.has_snapshot {
                 return false;
@@ -244,6 +291,7 @@ impl Editor {
 
     fn undo(&mut self) -> EditResult {
         let previous = self.undo_stack.pop().ok_or(EditError::NothingToUndo)?;
+        self.last_stream = None;
         if let Some(group) = self.undo_group.as_mut() {
             group.has_snapshot = false;
         }
@@ -255,6 +303,7 @@ impl Editor {
 
     fn redo(&mut self) -> EditResult {
         let next = self.redo_stack.pop().ok_or(EditError::NothingToRedo)?;
+        self.last_stream = None;
         self.undo_stack.push(self.snapshot());
         self.restore(next);
         self.revision += 1;
@@ -272,8 +321,18 @@ impl Editor {
         self.ensure_drawable()?;
         let before_snapshot = self.snapshot();
         let before = self.current_image_or_blank();
+        let redo_before = self.redo_stack.clone();
         let pushed_undo = self.push_undo(before_snapshot);
-        self.stroke = Some(Stroke { before, pushed_undo, samples: Vec::new(), sprayed: Vec::new(), ink, brush, kind });
+        self.stroke = Some(Stroke {
+            before,
+            redo_before,
+            pushed_undo,
+            samples: Vec::new(),
+            sprayed: Vec::new(),
+            ink,
+            brush,
+            kind,
+        });
         self.continue_stroke(at);
         Ok(())
     }
@@ -319,6 +378,7 @@ impl Editor {
             || (stroke.before.is_blank()
                 && self.sprite().cel_image(self.layer, self.frame).is_none_or(Pixels::is_blank));
         if unchanged {
+            self.redo_stack = stroke.redo_before;
             if stroke.pushed_undo {
                 if let Some(previous) = self.undo_stack.pop() {
                     self.restore(previous);
@@ -1253,5 +1313,64 @@ mod tests {
         editor.execute(Command::Undo).unwrap();
         editor.execute(Command::AddFrame).unwrap();
         assert_eq!(editor.execute(Command::Redo), Err(EditError::NothingToRedo));
+    }
+
+    #[test]
+    fn a_click_that_paints_nothing_keeps_redo_alive() {
+        let mut editor = editor();
+        editor.execute(Command::AddLayer { name: None }).unwrap();
+        editor.execute(Command::Undo).unwrap();
+        editor
+            .begin_stroke((0, 0), Ink::Erase, Brush::default(), StrokeKind::Freehand { pixel_perfect: false })
+            .unwrap();
+        editor.finish_stroke();
+        assert!(editor.can_redo());
+    }
+
+    #[test]
+    fn nested_undo_groups_stay_one_step_until_the_outer_one_closes() {
+        let mut editor = editor();
+        editor.begin_undo_group();
+        editor.execute(Command::AddLayer { name: None }).unwrap();
+        editor.begin_undo_group();
+        editor.execute(Command::AddFrame).unwrap();
+        editor.end_undo_group();
+        editor.execute(Command::AddFrame).unwrap();
+        editor.end_undo_group();
+        editor.execute(Command::Undo).unwrap();
+        assert_eq!((editor.sprite().layers.len(), editor.sprite().frame_count()), (1, 1));
+        assert!(!editor.can_undo());
+    }
+
+    #[test]
+    fn typing_a_note_is_one_undo_step_not_one_per_keystroke() {
+        let mut editor = editor();
+        editor.execute(Command::AddLayer { name: None }).unwrap();
+        for text in ["h", "hi", "hi!"] {
+            editor.execute(Command::SetNotes { text: text.into() }).unwrap();
+        }
+        editor.execute(Command::Undo).unwrap();
+        assert_eq!(editor.sprite().notes, "");
+        assert_eq!(editor.sprite().layers.len(), 2, "the drawing history underneath survives");
+    }
+
+    #[test]
+    fn dragging_a_frame_duration_is_one_undo_step() {
+        let mut editor = editor();
+        for duration_ms in [110, 120, 130] {
+            editor.execute(Command::SetFrameDuration { duration_ms, all_frames: false }).unwrap();
+        }
+        editor.execute(Command::Undo).unwrap();
+        assert_eq!(editor.sprite().frames[0].duration_ms, 100);
+    }
+
+    #[test]
+    fn a_different_edit_in_between_starts_a_new_note_step() {
+        let mut editor = editor();
+        editor.execute(Command::SetNotes { text: "a".into() }).unwrap();
+        editor.execute(Command::AddFrame).unwrap();
+        editor.execute(Command::SetNotes { text: "ab".into() }).unwrap();
+        editor.execute(Command::Undo).unwrap();
+        assert_eq!(editor.sprite().notes, "a");
     }
 }
