@@ -209,6 +209,10 @@ file.
 - Animation to GIF honouring durations and the tag range, transparency
   preserved.
 - PNG sequence (`name_000.png`, …).
+- Animated PNG (APNG): full alpha and exact millisecond delays. One frame as
+  lossless WebP.
+- Given 15 ms frames, when I export an APNG, then each frame decodes with
+  its pixels and exactly 15 ms.
 - Given a 3-frame 8×8 animation, when I export a GIF, then decoding it yields
   3 frames with the same pixels and delays.
 

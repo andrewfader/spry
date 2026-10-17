@@ -1,4 +1,8 @@
-//! PNG and GIF, in and out.
+//! PNG, APNG, GIF and WebP, in and out.
+//!
+//! APNG is the better animated format for pixel art: full 8-bit alpha and
+//! delays to the millisecond, where GIF has one-bit transparency and 10 ms
+//! steps. WebP is written lossless, for a single frame.
 //!
 //! Exports are always nearest-neighbour scaled. A pixel art export that
 //! blurs is a bug. GIFs honour every frame's duration and keep full
@@ -78,6 +82,56 @@ fn centisecond_delays(delays_ms: impl Iterator<Item = u32>) -> Vec<u16> {
             delay_cs as u16
         })
         .collect()
+}
+
+/// An animated PNG that loops forever, each frame shown for exactly its
+/// delay in milliseconds.
+pub fn encode_apng(frames: &[(Pixels, u32)]) -> Result<Vec<u8>> {
+    let Some((first, _)) = frames.first() else { bail!("an animation needs at least one frame") };
+    let mut bytes = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut bytes, first.width(), first.height());
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder.set_animated(frames.len() as u32, 0).context("setting up the APNG")?;
+        let mut writer = encoder.write_header().context("writing the APNG header")?;
+        for (image, delay_ms) in frames {
+            writer.set_frame_delay((*delay_ms).clamp(1, u32::from(u16::MAX)) as u16, 1000)?;
+            writer.write_image_data(&image.to_rgba_bytes()).context("writing an APNG frame")?;
+        }
+        writer.finish().context("finishing the APNG")?;
+    }
+    Ok(bytes)
+}
+
+/// Every frame of an APNG as `(image, delay_ms)`. Spry writes whole
+/// frames, so this only needs to read whole frames back.
+pub fn decode_apng(bytes: &[u8]) -> Result<Vec<(Pixels, u32)>> {
+    let mut reader = png::Decoder::new(Cursor::new(bytes)).read_info().context("that file isn't a PNG")?;
+    let count = reader.info().animation_control().map_or(1, |control| control.num_frames);
+    let mut frames = Vec::new();
+    let mut buffer = vec![0; reader.output_buffer_size().context("the PNG is too large")?];
+    for _ in 0..count {
+        let info = reader.next_frame(&mut buffer).context("reading an APNG frame")?;
+        let delay = reader.info().frame_control().map_or(0, |control| {
+            let denominator = if control.delay_den == 0 { 100 } else { u32::from(control.delay_den) };
+            u32::from(control.delay_num) * 1000 / denominator
+        });
+        let image = Pixels::from_rgba_bytes(info.width, info.height, &buffer[..info.buffer_size()])
+            .context("APNG frame size mismatch")?;
+        frames.push((image, delay));
+    }
+    Ok(frames)
+}
+
+/// A lossless WebP of one picture.
+pub fn encode_webp(pixels: &Pixels) -> Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    image::RgbaImage::from_raw(pixels.width(), pixels.height(), pixels.to_rgba_bytes())
+        .context("image buffer size mismatch")?
+        .write_to(&mut Cursor::new(&mut bytes), image::ImageFormat::WebP)
+        .context("encoding WebP")?;
+    Ok(bytes)
 }
 
 /// One global colour table shared by every frame, with index 0 kept for
@@ -195,6 +249,24 @@ mod tests {
         }
         let decoded = decode_gif(&encode_gif(&[(image, 100)]).unwrap()).unwrap();
         assert_eq!(decoded.len(), 1);
+    }
+
+    #[test]
+    fn apng_keeps_every_frame_alpha_and_millisecond_delay() {
+        let mut a = Pixels::new(3, 3);
+        a.set(0, 0, Rgba::rgba(255, 0, 77, 100));
+        let mut b = Pixels::new(3, 3);
+        b.set(2, 2, Rgba::rgb(0, 228, 54));
+        let frames = vec![(a, 15), (b, 105)];
+        assert_eq!(decode_apng(&encode_apng(&frames).unwrap()).unwrap(), frames);
+    }
+
+    #[test]
+    fn webp_is_lossless() {
+        let mut image = Pixels::new(5, 4);
+        image.set(1, 2, Rgba::rgba(10, 200, 30, 128));
+        image.set(4, 0, Rgba::rgb(255, 0, 77));
+        assert_eq!(decode_image(&encode_webp(&image).unwrap()).unwrap(), image);
     }
 
     #[test]

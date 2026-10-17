@@ -20,9 +20,11 @@ USAGE:
 EXPORT OPTIONS:
   --png OUT        one frame as PNG (see --frame)
   --gif OUT        animated GIF (see --tag)
+  --apng OUT       animated PNG: full alpha, exact delays (see --tag)
+  --webp OUT       one frame as lossless WebP (see --frame)
   --sheet OUT      sprite sheet PNG plus Aseprite JSON beside it
-  --frame N        frame to export with --png (default 0)
-  --tag NAME       only this tag's frames (--gif, --sheet)
+  --frame N        frame to export with --png or --webp (default 0)
+  --tag NAME       only this tag's frames (--gif, --apng, --sheet)
   --scale N        nearest-neighbour scale (default 1)
   --layout L       horizontal | vertical | grid | packed (default grid)
   --columns N      fixed grid columns
@@ -48,6 +50,8 @@ pub enum Invocation {
 pub enum ExportTarget {
     Png(PathBuf),
     Gif(PathBuf),
+    Apng(PathBuf),
+    Webp(PathBuf),
     Sheet(PathBuf),
 }
 
@@ -87,6 +91,8 @@ fn parse_export(words: Vec<&str>) -> Result<Invocation> {
         match flag {
             "--png" => target = Some(ExportTarget::Png(value()?.into())),
             "--gif" => target = Some(ExportTarget::Gif(value()?.into())),
+            "--apng" => target = Some(ExportTarget::Apng(value()?.into())),
+            "--webp" => target = Some(ExportTarget::Webp(value()?.into())),
             "--sheet" => target = Some(ExportTarget::Sheet(value()?.into())),
             "--frame" => options.frame = number(value()?)? as usize,
             "--tag" => options.tag = Some(value()?.to_string()),
@@ -108,7 +114,7 @@ fn parse_export(words: Vec<&str>) -> Result<Invocation> {
     };
     options.sheet.tag = options.tag.clone();
     options.sheet.scale = options.scale;
-    let target = target.context("say what to export: --png, --gif or --sheet")?;
+    let target = target.context("say what to export: --png, --gif, --apng, --webp or --sheet")?;
     Ok(Invocation::Export { source, target, options })
 }
 
@@ -136,6 +142,17 @@ pub fn run_headless(invocation: Invocation) -> Result<String> {
                 }
                 ExportTarget::Gif(out) => {
                     io::export_gif(&out, sprite, options.tag.as_deref(), options.scale)?;
+                    Ok(format!("wrote {}", out.display()))
+                }
+                ExportTarget::Apng(out) => {
+                    io::export_apng(&out, sprite, options.tag.as_deref(), options.scale)?;
+                    Ok(format!("wrote {}", out.display()))
+                }
+                ExportTarget::Webp(out) => {
+                    if options.frame >= sprite.frame_count() {
+                        bail!("there is no frame {} (the sprite has {})", options.frame, sprite.frame_count());
+                    }
+                    io::export_webp(&out, sprite, options.frame, options.scale)?;
                     Ok(format!("wrote {}", out.display()))
                 }
                 ExportTarget::Sheet(out) => {

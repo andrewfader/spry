@@ -220,9 +220,22 @@ mod tests {
 
     #[test]
     fn oversized_messages_are_refused_before_they_are_read() {
+        use std::io::{Read, Write};
+        // Only the headers go out: the bridge must refuse on the declared
+        // length alone, without waiting for 32 MiB to arrive.
         let bridge = HttpBridge::start(0, || {}).unwrap();
-        let huge = "x".repeat(MAX_BODY_BYTES as usize + 1);
-        assert_eq!(status_of(&bridge.url(), ("X-Test", "big"), huge), 413);
+        let mut stream = std::net::TcpStream::connect(bridge.address).unwrap();
+        stream.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+        let host = bridge.address;
+        let length = MAX_BODY_BYTES + 1;
+        write!(
+            stream,
+            "POST /mcp HTTP/1.1\r\nHost: {host}\r\nContent-Type: application/json\r\nContent-Length: {length}\r\n\r\n"
+        )
+        .unwrap();
+        let mut reply = [0; 12];
+        stream.read_exact(&mut reply).unwrap();
+        assert_eq!(&reply, b"HTTP/1.1 413");
     }
 
     #[test]

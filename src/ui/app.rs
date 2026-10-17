@@ -77,6 +77,8 @@ pub enum Action {
     Close,
     ExportPng,
     ExportGif,
+    ExportApng,
+    ExportWebp,
     ExportSheet,
     ExportSequence,
     ImportSheet,
@@ -289,6 +291,8 @@ impl App {
             Action::Close => self.close_active(),
             Action::ExportPng => self.browse(Purpose::ExportPng, &format!("{}.png", self.studio().title())),
             Action::ExportGif => self.browse(Purpose::ExportGif, &format!("{}.gif", self.studio().title())),
+            Action::ExportApng => self.browse(Purpose::ExportApng, &format!("{}-anim.png", self.studio().title())),
+            Action::ExportWebp => self.browse(Purpose::ExportWebp, &format!("{}.webp", self.studio().title())),
             Action::ExportSheet => self.browse(Purpose::ExportSheet, &format!("{}-sheet.png", self.studio().title())),
             Action::ExportSequence => self.browse(Purpose::ExportSequence, ""),
             Action::ImportSheet => self.browse(Purpose::ImportSheet, ""),
@@ -518,6 +522,13 @@ impl App {
             }
             Purpose::ExportPng => {
                 report(io::export_png(&path, &sprite, frame, scale).map(|_| format!("Exported {}", path.display())))
+            }
+            Purpose::ExportApng => report(
+                io::export_apng(&path, &sprite, self.preview_tag.as_deref(), scale)
+                    .map(|_| format!("Exported {}", path.display())),
+            ),
+            Purpose::ExportWebp => {
+                report(io::export_webp(&path, &sprite, frame, scale).map(|_| format!("Exported {}", path.display())))
             }
             Purpose::ExportGif => report(
                 io::export_gif(&path, &sprite, self.preview_tag.as_deref(), scale)

@@ -69,13 +69,14 @@ Notes come in three kinds: on the document, on a frame, or pinned to a pixel
 on the canvas. They're saved in the file and exported in the sheet JSON.
 
 **Exports.** PNG at 1–16× (nearest neighbour only), animated GIF with
-transparency and frame delays rounded to GIF's 10 ms steps without drifting (whole animation or one tag), PNG sequences,
+transparency and frame delays rounded to GIF's 10 ms steps without drifting (whole animation or one tag), animated PNG (APNG) with full alpha and exact
+delays, lossless WebP frames, PNG sequences,
 and sprite sheets (strip, grid, or shelf-packed, with padding, border,
 trimming and duplicate merging) with Aseprite-format JSON (`frames`,
 `frameTags`, `slices`, plus Spry's `notes`). It can also import a sheet back
 into frames, detecting the grid from transparent gutters.
 
-**MCP.** `spry mcp [file]` serves 32 tools over stdio: drawing with
+**MCP.** `spry mcp [file]` serves 34 tools over stdio: drawing with
 colours, patterns and brushes, a text pixel grid, a rendered PNG the model can
 look at, layers, frames, clones, tags, palettes, notes, versions, exports,
 undo, and `run_command` for every other editor verb. In the app, enable

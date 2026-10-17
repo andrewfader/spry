@@ -1245,6 +1245,14 @@ impl App {
             if ui.button("GIF…").on_hover_text("Uses the preview's tag selection").clicked() {
                 actions.push(Action::ExportGif);
             }
+            let apng =
+                ui.button("APNG…").on_hover_text("Animated PNG: full alpha and exact delays; uses the preview's tag");
+            if apng.clicked() {
+                actions.push(Action::ExportApng);
+            }
+            if ui.button("WebP (frame)…").clicked() {
+                actions.push(Action::ExportWebp);
+            }
             if ui.button("PNG sequence…").clicked() {
                 actions.push(Action::ExportSequence);
             }
@@ -1546,6 +1554,8 @@ fn palette_entries(app: &App) -> Vec<(String, Action)> {
         ("Close document".into(), Action::Close),
         ("Export PNG".into(), Action::ExportPng),
         ("Export GIF".into(), Action::ExportGif),
+        ("Export animated PNG (APNG)".into(), Action::ExportApng),
+        ("Export WebP".into(), Action::ExportWebp),
         ("Export sprite sheet".into(), Action::ExportSheet),
         ("Export PNG sequence".into(), Action::ExportSequence),
         ("Import sprite sheet".into(), Action::ImportSheet),

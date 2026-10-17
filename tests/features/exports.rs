@@ -77,3 +77,26 @@ fn exporting_a_missing_tag_is_an_error() {
     let error = io::export_gif(&scenario.path("x.gif"), scenario.sprite(), Some("jump"), 1).unwrap_err();
     assert!(error.to_string().contains("no tag called \"jump\""));
 }
+
+#[test]
+fn an_apng_keeps_every_frame_and_its_exact_delay() {
+    let mut scenario = three_frame_animation();
+    scenario.when(Command::SetFrameDuration { duration_ms: 15, all_frames: true });
+    let path = scenario.path("walk.png");
+    io::export_apng(&path, scenario.sprite(), None, 1).unwrap();
+    let frames = io::decode_apng(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(frames.len(), 3);
+    for (index, (image, delay)) in frames.iter().enumerate() {
+        assert_eq!(image, &scenario.sprite().composite(index));
+        assert_eq!(*delay, 15, "APNG keeps the 15 ms a GIF would round");
+    }
+}
+
+#[test]
+fn a_frame_exports_as_lossless_webp() {
+    let scenario = three_frame_animation();
+    let path = scenario.path("frame.webp");
+    io::export_webp(&path, scenario.sprite(), 1, 2).unwrap();
+    let image = io::decode_image(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(image, scenario.sprite().composite(1).scaled_up(2));
+}

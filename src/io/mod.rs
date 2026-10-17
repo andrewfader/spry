@@ -10,7 +10,7 @@ use crate::editor::{limits, Document, Palette, Pixels, Sprite};
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
-pub use raster_formats::{decode_gif, decode_image, encode_gif, encode_png};
+pub use raster_formats::{decode_apng, decode_gif, decode_image, encode_apng, encode_gif, encode_png, encode_webp};
 pub use sheet::{SheetLayout, SheetOptions, SpriteSheet};
 
 /// Opens anything Spry can read: a `.spry` document, or an Aseprite file,
@@ -107,15 +107,28 @@ pub fn export_png(path: &Path, sprite: &Sprite, frame: usize, scale: u32) -> Res
 }
 
 pub fn export_gif(path: &Path, sprite: &Sprite, tag: Option<&str>, scale: u32) -> Result<()> {
-    let tag = match tag {
-        Some(name) => Some(
-            sprite.tags.iter().find(|t| t.name == name).with_context(|| format!("there's no tag called \"{name}\""))?,
-        ),
-        None => None,
-    };
     limits::check_export_size(sprite.width, sprite.height, scale).map_err(anyhow::Error::msg)?;
-    let frames = raster_formats::animation_frames(sprite, tag, scale);
+    let frames = raster_formats::animation_frames(sprite, find_tag(sprite, tag)?, scale);
     std::fs::write(path, encode_gif(&frames)?).with_context(|| format!("writing {}", path.display()))
+}
+
+pub fn export_apng(path: &Path, sprite: &Sprite, tag: Option<&str>, scale: u32) -> Result<()> {
+    limits::check_export_size(sprite.width, sprite.height, scale).map_err(anyhow::Error::msg)?;
+    let frames = raster_formats::animation_frames(sprite, find_tag(sprite, tag)?, scale);
+    std::fs::write(path, encode_apng(&frames)?).with_context(|| format!("writing {}", path.display()))
+}
+
+pub fn export_webp(path: &Path, sprite: &Sprite, frame: usize, scale: u32) -> Result<()> {
+    limits::check_export_size(sprite.width, sprite.height, scale).map_err(anyhow::Error::msg)?;
+    let bytes = encode_webp(&sprite.composite(frame).scaled_up(scale))?;
+    std::fs::write(path, bytes).with_context(|| format!("writing {}", path.display()))
+}
+
+fn find_tag<'a>(sprite: &'a Sprite, name: Option<&str>) -> Result<Option<&'a crate::editor::Tag>> {
+    name.map(|name| {
+        sprite.tags.iter().find(|t| t.name == name).with_context(|| format!("there's no tag called \"{name}\""))
+    })
+    .transpose()
 }
 
 /// Writes `name_000.png`, `name_001.png`, … into `directory` and returns

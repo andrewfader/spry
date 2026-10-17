@@ -263,6 +263,16 @@ pub fn catalogue() -> Vec<ToolSpec> {
             input_schema: object_schema(json!({ "path": { "type": "string" }, "tag": { "type": "string" }, "scale": { "type": "integer", "minimum": 1 } }), &["path"]),
         },
         ToolSpec {
+            name: "export_apng",
+            description: "Write the animation (or one tag) as an animated PNG: full alpha and exact millisecond delays, unlike GIF.",
+            input_schema: object_schema(json!({ "path": { "type": "string" }, "tag": { "type": "string" }, "scale": { "type": "integer", "minimum": 1 } }), &["path"]),
+        },
+        ToolSpec {
+            name: "export_webp",
+            description: "Write one frame as a lossless WebP.",
+            input_schema: object_schema(json!({ "path": { "type": "string" }, "frame": { "type": "integer" }, "scale": { "type": "integer", "minimum": 1 } }), &["path"]),
+        },
+        ToolSpec {
             name: "export_sheet",
             description: "Write a sprite sheet PNG plus Aseprite-format JSON beside it.",
             input_schema: object_schema(
@@ -549,6 +559,22 @@ fn call_on_studio(studio: &mut Studio, name: &str, args: &Value) -> ToolResult {
                 return Err(format!("there is no frame {frame}"));
             }
             io::export_png(&target_path, studio.editor.sprite(), frame, scale_arg(args))
+                .map_err(|e| format!("{e:#}"))?;
+            Ok(ToolOutput::text(format!("wrote {}", target_path.display())))
+        }
+        "export_apng" => {
+            let target_path = export_path(args, "png")?;
+            io::export_apng(&target_path, studio.editor.sprite(), string(args, "tag"), scale_arg(args))
+                .map_err(|e| format!("{e:#}"))?;
+            Ok(ToolOutput::text(format!("wrote {}", target_path.display())))
+        }
+        "export_webp" => {
+            let target_path = export_path(args, "webp")?;
+            let frame = integer(args, "frame").map_or(studio.editor.frame, |f| f.max(0) as usize);
+            if frame >= studio.editor.sprite().frame_count() {
+                return Err(format!("there is no frame {frame}"));
+            }
+            io::export_webp(&target_path, studio.editor.sprite(), frame, scale_arg(args))
                 .map_err(|e| format!("{e:#}"))?;
             Ok(ToolOutput::text(format!("wrote {}", target_path.display())))
         }

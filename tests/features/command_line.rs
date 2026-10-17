@@ -52,3 +52,19 @@ fn mistakes_exit_with_a_usage_hint() {
     let help = spry(&["--help"]);
     assert!(String::from_utf8_lossy(&help.stdout).contains("spry mcp"));
 }
+
+#[test]
+fn the_command_line_exports_apng_and_webp() {
+    let scenario = given_a_blank_sprite(4, 4);
+    let source = scenario.path("tiny.spry");
+    spry::studio::Studio::new(4, 4).save(Some(&source)).unwrap();
+    for (flag, name) in [("--apng", "tiny-anim.png"), ("--webp", "tiny.webp")] {
+        let out = scenario.path(name);
+        let status = std::process::Command::new(env!("CARGO_BIN_EXE_spry"))
+            .args(["export", source.to_str().unwrap(), flag, out.to_str().unwrap()])
+            .status()
+            .unwrap();
+        assert!(status.success(), "{flag}");
+        assert!(spry::io::decode_image(&std::fs::read(&out).unwrap()).is_ok(), "{flag} wrote a readable image");
+    }
+}
