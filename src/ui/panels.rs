@@ -712,8 +712,18 @@ impl App {
                 commands.push(Command::SetFrameDuration { duration_ms: duration, all_frames: false });
             }
             let mut onion = document.view.onion_skin;
-            if ui.toggle_value(&mut onion, "🧅 Onion").clicked() {
+            if ui.toggle_value(&mut onion, "🧅 Onion").on_hover_text("Onion skin (Tab)").clicked() {
                 actions.push(Action::ToggleOnionSkin);
+            }
+            if onion {
+                let view = &document.view;
+                let (mut before, mut after, mut opacity) = (view.onion_before, view.onion_after, view.onion_opacity);
+                let mut changed = ui.add(egui::DragValue::new(&mut before).range(0..=8).prefix("◀ ")).changed();
+                changed |= ui.add(egui::DragValue::new(&mut after).range(0..=8).prefix("▶ ")).changed();
+                changed |= ui.add(egui::Slider::new(&mut opacity, 20..=220).show_value(false)).changed();
+                if changed {
+                    actions.push(Action::OnionSkin { before, after, opacity });
+                }
             }
         });
         egui::ScrollArea::horizontal().show(ui, |ui| {
@@ -838,20 +848,64 @@ impl App {
         ui.separator();
         let document = &self.documents[self.active];
         let prefix = document.texture_prefix();
-        let versions = &document.studio.editor.document.versions;
-        let current = document.studio.editor.composite_for_display(document.studio.editor.frame);
+        let editor = &document.studio.editor;
+        let versions = &editor.document.versions;
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        let frame_of = |sprite: &crate::editor::Sprite| editor.frame.min(sprite.frame_count() - 1);
+        if let Some(version) = self.selected_version.and_then(|id| editor.document.version(id)) {
+            // Only the chosen version is compared, and only when the
+            // document changes, so a long history costs nothing per frame.
+            let key = (document.id, version.id, editor.revision);
+            let old = version.sprite.composite(frame_of(&version.sprite));
+            let changed = match self.version_diff {
+                Some((cached_key, count)) if cached_key == key => count,
+                _ => {
+                    let count =
+                        crate::editor::document::changed_pixels(&old, &editor.composite_for_display(editor.frame))
+                            .len();
+                    self.version_diff = Some((key, count));
+                    count
+                }
+            };
+            let overlay = self
+                .textures
+                .get(ctx, &format!("{prefix}diff{}", version.id), editor.revision, || {
+                    crate::editor::document::difference_overlay(&old, &editor.composite_for_display(editor.frame))
+                })
+                .id();
+            let thumbnail = self
+                .textures
+                .get(ctx, &format!("{prefix}version{}", version.id), version.id as u64, || old.clone())
+                .id();
+            let size = Vec2::new(version.sprite.width as f32, version.sprite.height as f32)
+                * (110.0 / version.sprite.width.max(version.sprite.height) as f32);
+            ui.label(RichText::new(format!("Version {} · {}", version.id, version.message)).strong());
+            ui.horizontal(|ui| {
+                ui.vertical(|ui| {
+                    ui.add(egui::Image::new((thumbnail, size)));
+                    ui.weak("then");
+                });
+                ui.vertical(|ui| {
+                    ui.add(egui::Image::new((overlay, size)));
+                    ui.weak(if changed == 0 {
+                        "same as now".to_string()
+                    } else {
+                        format!("{changed} px changed since")
+                    });
+                });
+            });
+            ui.separator();
+        }
         egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
             if versions.is_empty() {
                 ui.weak("No versions yet.");
             }
             for version in versions.iter().rev() {
-                let frame = document.studio.editor.frame.min(version.sprite.frame_count() - 1);
-                let thumbnail = version.sprite.composite(frame);
-                let changed = crate::editor::document::changed_pixels(&thumbnail, &current).len();
                 let texture = self
                     .textures
-                    .get(ctx, &format!("{prefix}version{}", version.id), version.id as u64, || thumbnail.clone())
+                    .get(ctx, &format!("{prefix}version{}", version.id), version.id as u64, || {
+                        version.sprite.composite(frame_of(&version.sprite))
+                    })
                     .id();
                 ui.horizontal(|ui| {
                     let longest = version.sprite.width.max(version.sprite.height) as f32;
@@ -860,13 +914,12 @@ impl App {
                         Vec2::new(version.sprite.width as f32, version.sprite.height as f32) * (40.0 / longest),
                     )));
                     ui.vertical(|ui| {
-                        ui.label(RichText::new(format!("{} · {}", version.id, version.message)).strong());
-                        let diff = if changed == 0 {
-                            "same as now".to_string()
-                        } else {
-                            format!("{changed} px differ from now")
-                        };
-                        ui.weak(format!("{} · {diff}", time_ago(now.saturating_sub(version.created_at))));
+                        let chosen = self.selected_version == Some(version.id);
+                        let title = RichText::new(format!("{} · {}", version.id, version.message)).strong();
+                        if ui.selectable_label(chosen, title).on_hover_text("Compare with now").clicked() {
+                            self.selected_version = if chosen { None } else { Some(version.id) };
+                        }
+                        ui.weak(time_ago(now.saturating_sub(version.created_at)));
                         ui.horizontal(|ui| {
                             if ui.small_button("Restore").clicked() {
                                 commands.push(Command::RestoreVersion { id: version.id });
@@ -885,8 +938,7 @@ impl App {
             self.edit(command);
         }
         if let Some(id) = branch {
-            if let Some(version) = self.studio().editor.document.version(id) {
-                let document = crate::editor::Document::new(version.sprite.clone());
+            if let Some(document) = self.studio().editor.document.branch(id) {
                 self.add_document(Studio::from_document(document));
                 self.status = format!("Branched version {id} into a new document");
             }

@@ -6,6 +6,7 @@
 //! restore weeks later. Sprites share unchanged images through `Arc`, so a
 //! hundred versions of a sprite cost little more than one.
 
+use super::color::Rgba;
 use super::pixels::Pixels;
 use super::raster::Point;
 use super::sprite::Sprite;
@@ -61,6 +62,29 @@ impl Document {
     pub fn version(&self, id: u32) -> Option<&Version> {
         self.versions.iter().find(|v| v.id == id)
     }
+
+    /// A new document that starts from version `id`, with the history up
+    /// to and including it, so the branch remembers where it came from.
+    pub fn branch(&self, id: u32) -> Option<Document> {
+        let position = self.versions.iter().position(|v| v.id == id)?;
+        let versions = self.versions[..=position].to_vec();
+        Some(Document { sprite: versions[position].sprite.clone(), versions, next_version_id: id + 1 })
+    }
+}
+
+/// A picture of what changed from `before` to `after`: changed pixels show
+/// their new colour, pixels that were erased show in magenta, and
+/// everything that stayed the same is a faint grey, so the eye goes
+/// straight to the edits.
+pub fn difference_overlay(before: &Pixels, after: &Pixels) -> Pixels {
+    const UNCHANGED: Rgba = Rgba::rgba(128, 128, 128, 40);
+    const ERASED: Rgba = Rgba::rgb(255, 0, 255);
+    let mut overlay = Pixels::filled(before.width().max(after.width()), before.height().max(after.height()), UNCHANGED);
+    for (x, y) in changed_pixels(before, after) {
+        let now = after.get(x, y);
+        overlay.set(x, y, if now.is_transparent() { ERASED } else { now.with_alpha(255) });
+    }
+    overlay
 }
 
 /// The pixels that differ between two frames, for the visual version diff.

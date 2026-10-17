@@ -1,7 +1,7 @@
 //! Feature 10: versioning.
 
 use crate::support::*;
-use spry::editor::document::changed_pixels;
+use spry::editor::document::{changed_pixels, difference_overlay};
 use spry::editor::{Command, Ink, PixelValue};
 
 fn with_two_versions() -> Scenario {
@@ -62,4 +62,36 @@ fn restoring_a_missing_version_is_refused() {
     let mut scenario = with_two_versions();
     scenario.when_trying(Command::RestoreVersion { id: 99 });
     scenario.then_it_failed_saying("version 99");
+}
+
+#[test]
+fn branching_a_version_opens_it_as_a_new_document_with_its_history() {
+    let scenario = with_two_versions();
+    let branch = scenario.studio.editor.document.branch(1).expect("version 1 exists");
+    assert_eq!(branch.sprite.cel_image(0, 0).unwrap().get(4, 4), BLUE);
+    let messages: Vec<&str> = branch.versions.iter().map(|v| v.message.as_str()).collect();
+    assert_eq!(messages, vec!["base"], "the branch forgets what came after it");
+    assert!(scenario.studio.editor.document.branch(99).is_none());
+}
+
+#[test]
+fn a_branch_numbers_its_new_versions_after_the_one_it_came_from() {
+    let scenario = with_two_versions();
+    let mut branch = scenario.studio.editor.document.branch(1).unwrap();
+    branch.sprite.notes = "a new direction".into();
+    assert_eq!(branch.commit_version("fork", 0), Some(2));
+    assert_eq!(branch.validate(), Ok(()));
+}
+
+#[test]
+fn the_visual_diff_highlights_only_what_changed() {
+    let scenario = with_two_versions();
+    let document = &scenario.studio.editor.document;
+    let (base, armour) =
+        (document.version(1).unwrap().sprite.composite(0), document.version(2).unwrap().sprite.composite(0));
+    let overlay = difference_overlay(&base, &armour);
+    assert_eq!(overlay.get(4, 4), RED, "the new armour pixel shows in its colour");
+    assert!(overlay.get(0, 0).a() < 64, "unchanged pixels fade into the background");
+    let erased = difference_overlay(&armour, &spry::editor::Pixels::new(8, 8));
+    assert_eq!(erased.get(4, 4), spry::editor::Rgba::rgb(255, 0, 255), "erased pixels show in magenta");
 }

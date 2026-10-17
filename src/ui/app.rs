@@ -92,6 +92,7 @@ pub enum Action {
     ZoomToFit,
     ToggleGrid,
     ToggleOnionSkin,
+    OnionSkin { before: usize, after: usize, opacity: u8 },
     ToggleTiledPreview,
     ToggleAppearance,
     PreviousFrame,
@@ -159,6 +160,10 @@ pub struct App {
     pub version_message: String,
     pub sheet_cell: (u32, u32),
     pub closing: Option<Closing>,
+    /// The version the Versions panel is comparing with now.
+    pub selected_version: Option<u32>,
+    /// The last pixel-diff count, keyed by (document, version, revision).
+    pub version_diff: Option<((u64, u32, u64), usize)>,
     /// Set once the user has chosen to quit and lose unsaved changes.
     quit_confirmed: bool,
 }
@@ -198,6 +203,8 @@ impl App {
             version_message: String::new(),
             sheet_cell: (16, 16),
             closing: None,
+            selected_version: None,
+            version_diff: None,
             quit_confirmed: false,
         };
         match initial.map(|path| Studio::open(&path).map(|studio| (studio, path))) {
@@ -299,6 +306,10 @@ impl App {
             Action::ZoomToFit => self.document_mut().view.refit(),
             Action::ToggleGrid => flip(&mut self.document_mut().view.show_grid),
             Action::ToggleOnionSkin => flip(&mut self.document_mut().view.onion_skin),
+            Action::OnionSkin { before, after, opacity } => {
+                let view = &mut self.document_mut().view;
+                (view.onion_before, view.onion_after, view.onion_opacity) = (before, after, opacity);
+            }
             Action::ToggleTiledPreview => flip(&mut self.document_mut().view.tiled),
             Action::ToggleAppearance => {
                 self.settings.appearance = match self.settings.appearance {

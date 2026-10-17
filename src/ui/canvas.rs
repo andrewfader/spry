@@ -23,6 +23,8 @@ pub struct CanvasView {
     pub onion_skin: bool,
     pub onion_before: usize,
     pub onion_after: usize,
+    /// How strongly the nearest ghost shows. Ghosts further away fade out.
+    pub onion_opacity: u8,
     pub tiled: bool,
     fitted: bool,
     gesture: Option<Gesture>,
@@ -39,6 +41,7 @@ impl Default for CanvasView {
             onion_skin: false,
             onion_before: 1,
             onion_after: 1,
+            onion_opacity: 100,
             tiled: false,
             fitted: false,
             gesture: None,
@@ -204,22 +207,26 @@ fn paint_sprite(
 
     if view.onion_skin {
         let frames = editor.sprite().frame_count();
-        let tint_before = Color32::from_rgba_unmultiplied(255, 90, 90, 90);
-        let tint_after = Color32::from_rgba_unmultiplied(90, 150, 255, 90);
+        let fade = |step: usize, reach: usize| {
+            (view.onion_opacity as usize * (reach + 1 - step) / reach.max(1)).min(255) as u8
+        };
+        let tint_before = |step| Color32::from_rgba_unmultiplied(255, 90, 90, fade(step, view.onion_before));
+        let tint_after = |step| Color32::from_rgba_unmultiplied(90, 150, 255, fade(step, view.onion_after));
         let mut ghost = |other: usize, tint: Color32| {
             let id = textures
                 .get(ui.ctx(), &format!("{prefix}onion{other}"), revision, || editor.sprite().composite(other))
                 .id();
             painter.image(id, canvas_rect, full_uv, tint);
         };
-        for step in 1..=view.onion_before {
+        // Furthest first, so the nearest ghost sits on top.
+        for step in (1..=view.onion_before).rev() {
             if let Some(other) = frame.checked_sub(step) {
-                ghost(other, tint_before);
+                ghost(other, tint_before(step));
             }
         }
-        for step in 1..=view.onion_after {
+        for step in (1..=view.onion_after).rev() {
             if frame + step < frames {
-                ghost(frame + step, tint_after);
+                ghost(frame + step, tint_after(step));
             }
         }
     }
