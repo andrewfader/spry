@@ -128,6 +128,23 @@ pub fn glass_frame(appearance: Appearance) -> Frame {
         .inner_margin(Margin::same(10))
 }
 
+/// Shows `frame` with the blurred backdrop behind it when `blur` is on.
+/// The backdrop's spot in the layer is taken before the frame draws, so it
+/// sits underneath the frame's tint, border and contents.
+pub fn show_glass<R>(
+    ui: &mut egui::Ui,
+    frame: Frame,
+    blur: Option<super::glass_blur::GlassBlur>,
+    add_contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> egui::InnerResponse<R> {
+    let slot = blur.as_ref().map(|_| ui.painter().add(egui::Shape::Noop));
+    let shown = frame.show(ui, add_contents);
+    if let (Some(slot), Some(blur)) = (slot, blur) {
+        ui.painter().set(slot, blur.backdrop(shown.response.rect, f32::from(frame.corner_radius.nw)));
+    }
+    shown
+}
+
 /// A tighter, pill-shaped frame for toolbars and docks.
 pub fn pill_frame(appearance: Appearance) -> Frame {
     glass_frame(appearance).corner_radius(CornerRadius::same(22)).inner_margin(Margin::symmetric(8, 6))
@@ -163,5 +180,53 @@ fn soft_disc(painter: &Painter, centre: Pos2, radius: f32, colour: Color32) {
     for ring in 0..RINGS {
         let t = 1.0 - ring as f32 / RINGS as f32;
         painter.circle_filled(centre, radius * t, colour);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// Every character in a string literal of the UI's source, so a test
+    /// can check the bundled fonts can draw them. Comments don't count.
+    fn characters_in_string_literals(source: &str) -> String {
+        let mut found = String::new();
+        let (mut inside, mut escaped) = (false, false);
+        for c in source.chars() {
+            match (inside, escaped, c) {
+                (true, true, _) => escaped = false,
+                (true, false, '\\') => escaped = true,
+                (_, false, '"') => inside = !inside,
+                (true, false, _) => found.push(c),
+                _ => {}
+            }
+        }
+        found
+    }
+
+    #[test]
+    fn every_icon_and_symbol_in_the_ui_has_a_glyph_in_the_bundled_fonts() {
+        let ctx = egui::Context::default();
+        let _ = ctx.run(egui::RawInput::default(), |_| {});
+        let font = egui::FontId::proportional(14.0);
+        let sources = [
+            ("app.rs", include_str!("app.rs")),
+            ("canvas.rs", include_str!("canvas.rs")),
+            ("file_browser.rs", include_str!("file_browser.rs")),
+            ("panels.rs", include_str!("panels.rs")),
+            ("tools.rs", include_str!("tools.rs")),
+            ("theme.rs", include_str!("theme.rs")),
+        ];
+        for (file, source) in sources {
+            let missing: String = characters_in_string_literals(source)
+                .chars()
+                .filter(|c| !c.is_ascii() && !ctx.fonts(|fonts| fonts.has_glyph(&font, *c)))
+                .collect();
+            assert!(missing.is_empty(), "{file} uses characters the fonts can't draw, which show as □: {missing}");
+        }
+    }
+
+    #[test]
+    fn string_literal_scanning_reads_only_inside_quotes_and_skips_escapes() {
+        let source = "// → not a string\nlet a = \"x\\ny\";";
+        assert_eq!(characters_in_string_literals(source), "xy");
     }
 }

@@ -16,6 +16,7 @@ USAGE:
   spry mcp [FILE]                 serve MCP over stdio for LLM agents
   spry info FILE                  describe a sprite
   spry export FILE [OPTIONS]      export without opening a window
+  spry capture OUT.png [FILE]     open the window, save a picture of it, close
 
 EXPORT OPTIONS:
   --png OUT        one frame as PNG (see --frame)
@@ -40,9 +41,19 @@ EXPORT OPTIONS:
 #[derive(Debug, PartialEq)]
 pub enum Invocation {
     Gui(Option<PathBuf>),
+    /// Open the window on `file`, save what it shows to `out`, and quit:
+    /// for documentation, bug reports, and checking the look of the UI.
+    Capture {
+        out: PathBuf,
+        file: Option<PathBuf>,
+    },
     Mcp(Option<PathBuf>),
     Info(PathBuf),
-    Export { source: PathBuf, target: ExportTarget, options: ExportOptions },
+    Export {
+        source: PathBuf,
+        target: ExportTarget,
+        options: ExportOptions,
+    },
     Help,
     Version,
 }
@@ -74,6 +85,10 @@ pub fn parse(arguments: &[String]) -> Result<Invocation> {
         Some("mcp") => Ok(Invocation::Mcp(words.next().map(PathBuf::from))),
         Some("info") => Ok(Invocation::Info(PathBuf::from(words.next().context("`spry info` needs a file")?))),
         Some("export") => parse_export(words.collect()),
+        Some("capture") => {
+            let out = PathBuf::from(words.next().context("`spry capture` needs a .png to write")?);
+            Ok(Invocation::Capture { out, file: words.next().map(PathBuf::from) })
+        }
         Some(flag) if flag.starts_with('-') => bail!("unknown option `{flag}`\n\n{USAGE}"),
         Some(path) => Ok(Invocation::Gui(Some(PathBuf::from(path)))),
     }
@@ -175,7 +190,9 @@ pub fn run_headless(invocation: Invocation) -> Result<String> {
                 }
             }
         }
-        Invocation::Gui(_) | Invocation::Mcp(_) => bail!("this invocation needs a window or a stdio session"),
+        Invocation::Gui(_) | Invocation::Capture { .. } | Invocation::Mcp(_) => {
+            bail!("this invocation needs a window or a stdio session")
+        }
     }
 }
 
@@ -191,6 +208,11 @@ mod tests {
     fn no_arguments_opens_the_editor() {
         assert_eq!(parse(&[]).unwrap(), Invocation::Gui(None));
         assert_eq!(parse(&args("hero.spry")).unwrap(), Invocation::Gui(Some("hero.spry".into())));
+        assert_eq!(
+            parse(&args("capture shot.png hero.spry")).unwrap(),
+            Invocation::Capture { out: "shot.png".into(), file: Some("hero.spry".into()) }
+        );
+        assert!(parse(&args("capture")).unwrap_err().to_string().contains("needs a .png"));
     }
 
     #[test]

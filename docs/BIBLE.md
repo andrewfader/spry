@@ -281,7 +281,15 @@ file.
 
 ### 18. Glass UI (`ui` module; scenario-tested through `editor` commands)
 - A soft gradient backdrop. Translucent rounded panels with hairline light
-  borders and soft shadows. A floating tool dock on the left, a floating
+  borders and soft shadows, over a real blur of whatever is behind them
+  (frosted glass, drawn on the GPU; switchable off in Settings for slow
+  graphics).
+- Every icon is a glyph the bundled fonts can draw, checked by a test, so
+  nothing renders as an empty box on any platform.
+- Panels open in a non-overlapping default arrangement that follows the
+  window's size until you move them; where you put them is remembered.
+- `spry capture OUT.png [FILE]` saves a picture of the window, for docs,
+  bug reports and checking the look. A floating tool dock on the left, a floating
   timeline at the bottom, inspector panels on the right, and a dark/light
   theme.
 - Command palette (Ctrl+K) lists every action by name, so every action can be

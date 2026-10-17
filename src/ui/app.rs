@@ -7,6 +7,7 @@
 
 use super::canvas::{self, CanvasInput, CanvasRequest, CanvasView};
 use super::file_browser::{BrowserOutcome, FileBrowser, Purpose};
+use super::glass_blur::GlassBlur;
 use super::settings::Settings;
 use super::shortcuts;
 use super::textures::TextureCache;
@@ -162,6 +163,17 @@ impl ResizeDraft {
     }
 }
 
+/// A `spry capture` run: draw a few frames so fonts, textures and layout
+/// settle, ask egui for a screenshot, save it, and close.
+struct WindowCapture {
+    out: PathBuf,
+    frames_drawn: u32,
+    requested: bool,
+}
+
+/// Frames to draw before capturing. The first few still lay out windows.
+const CAPTURE_AFTER_FRAMES: u32 = 30;
+
 /// What's waiting on an answer about unsaved work.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Closing {
@@ -206,6 +218,10 @@ pub struct App {
     pub closing: Option<Closing>,
     /// Set for one frame after Reset layout, to move every panel home.
     pub layout_reset_pending: bool,
+    /// The screen last frame, to notice the window being resized.
+    pub last_screen: egui::Rect,
+    capture: Option<WindowCapture>,
+    glass_blur: GlassBlur,
     /// The version the Versions panel is comparing with now.
     pub selected_version: Option<u32>,
     /// The last pixel-diff count, keyed by (document, version, revision).
@@ -215,7 +231,7 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(ctx: &egui::Context, initial: Option<PathBuf>) -> App {
+    pub fn new(ctx: &egui::Context, initial: Option<PathBuf>, capture: Option<PathBuf>) -> App {
         let settings = Settings::load();
         theme::apply(ctx, settings.appearance);
         let agent = AgentWorker::new(settings.provider());
@@ -251,10 +267,18 @@ impl App {
             sheet_cell: (16, 16),
             closing: None,
             layout_reset_pending: false,
+            last_screen: egui::Rect::NOTHING,
+            glass_blur: GlassBlur::default(),
+            capture: capture.map(|out| WindowCapture { out, frames_drawn: 0, requested: false }),
             selected_version: None,
             version_diff: None,
             quit_confirmed: false,
         };
+        if app.capture.is_some() {
+            // Captures show the standard layout, whatever this machine's
+            // user arranged, so pictures are comparable.
+            app.settings.layout = super::settings::PanelLayout::default();
+        }
         let saved_panels: std::collections::HashSet<Panel> =
             app.settings.layout.open.iter().filter_map(|key| Panel::from_key(key)).collect();
         if !saved_panels.is_empty() {
@@ -305,6 +329,11 @@ impl App {
 
     pub fn appearance(&self) -> Appearance {
         self.settings.appearance
+    }
+
+    /// The blur renderer, when frosted glass is switched on.
+    pub fn blur(&self) -> Option<GlassBlur> {
+        self.settings.glass_blur.then(|| self.glass_blur.clone())
     }
 
     pub fn glass(&self) -> egui::Frame {
@@ -773,6 +802,37 @@ impl App {
         }
     }
 
+    fn advance_capture(&mut self, ctx: &egui::Context) {
+        let Some(capture) = self.capture.as_mut() else { return };
+        capture.frames_drawn += 1;
+        if !capture.requested && capture.frames_drawn >= CAPTURE_AFTER_FRAMES {
+            capture.requested = true;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
+        }
+        let shot = ctx.input(|input| {
+            input.events.iter().find_map(|event| match event {
+                egui::Event::Screenshot { image, .. } => Some(image.clone()),
+                _ => None,
+            })
+        });
+        if let Some(image) = shot {
+            let rgba: Vec<u8> = image.pixels.iter().flat_map(|pixel| pixel.to_srgba_unmultiplied()).collect();
+            let [width, height] = image.size;
+            let saved = crate::editor::Pixels::from_rgba_bytes(width as u32, height as u32, &rgba)
+                .ok_or_else(|| anyhow::anyhow!("the screenshot's size didn't match its pixels"))
+                .and_then(|pixels| io::encode_png(&pixels))
+                .and_then(|png| std::fs::write(&capture.out, png).map_err(Into::into));
+            match saved {
+                Ok(()) => eprintln!("saved {}", capture.out.display()),
+                Err(error) => eprintln!("couldn't save the capture: {error:#}"),
+            }
+            self.quit_confirmed = true;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        } else {
+            ctx.request_repaint();
+        }
+    }
+
     pub fn window_title(&self) -> String {
         let studio = self.studio();
         let dirty = if studio.editor.has_unsaved_changes() { " •" } else { "" };
@@ -865,6 +925,7 @@ impl eframe::App for App {
 
         self.show_panels(ctx);
         self.show_close_dialog(ctx);
+        self.advance_capture(ctx);
         if !self.is_open(Panel::ResizeCanvas) {
             self.resize = None;
         }
@@ -888,6 +949,9 @@ impl eframe::App for App {
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        if self.capture.is_some() {
+            return; // A capture run leaves the user's settings alone.
+        }
         let mut open: Vec<String> = self.open_panels.iter().map(|panel| panel.key().to_string()).collect();
         open.sort();
         self.settings.layout.open = open;

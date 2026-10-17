@@ -36,6 +36,8 @@ pub struct Settings {
     pub recent_files: Vec<PathBuf>,
     pub last_directory: Option<PathBuf>,
     pub layout: PanelLayout,
+    /// Blur what's behind the glass panels (needs OpenGL 3.1 or ES 3.0).
+    pub glass_blur: bool,
 }
 
 /// Where you left the floating panels, and which were open, so Spry comes
@@ -89,6 +91,7 @@ impl Default for Settings {
             recent_files: Vec::new(),
             last_directory: None,
             layout: PanelLayout::default(),
+            glass_blur: true,
         }
     }
 }

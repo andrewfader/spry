@@ -74,19 +74,26 @@ fn swatch(ui: &mut egui::Ui, colour: Rgba, size: f32, selected: bool) -> egui::R
 }
 
 /// Lays out a panel the first time it appears, relative to the screen.
+fn panel_id(panel: Panel) -> egui::Id {
+    egui::Id::new(("panel", panel.title()))
+}
+
 /// A floating glass panel, where it was left last time (or at `home` the
 /// first time, and after Reset layout). It's kept on screen.
-fn window(app: &App, panel: Panel, home: egui::Pos2, width: f32) -> egui::Window<'static> {
+fn window(app: &App, panel: Panel, home: egui::Pos2, width: f32, follow_default: bool) -> egui::Window<'static> {
     let saved = app.settings.layout.position(panel.key()).map(|[x, y]| egui::pos2(x, y));
     let window = egui::Window::new(panel.title())
-        .id(egui::Id::new(("panel", panel.title())))
+        .id(panel_id(panel))
         .frame(app.glass())
         .default_pos(saved.unwrap_or(home))
         .default_width(width)
+        // Contents wrap at this width rather than pushing the panel wider
+        // than its place in the layout. Dragging the edge still resizes.
+        .max_width(width.max(260.0) + 40.0)
         .constrain(true)
         .collapsible(true)
         .resizable(true);
-    if app.layout_reset_pending {
+    if app.layout_reset_pending || follow_default {
         window.current_pos(home)
     } else {
         window
@@ -101,7 +108,13 @@ impl App {
         self.tool_inspector(ctx);
         self.status_bar(ctx);
 
-        let right = screen.right() - 290.0;
+        // The right-hand column is as wide as the Layers panel's button row.
+        let right = screen.right() - 380.0;
+        // Panels nobody has moved follow their default places when the
+        // window changes size (tiling window managers resize it right after
+        // it opens).
+        let screen_changed = self.last_screen != screen;
+        self.last_screen = screen;
         let mut toggles: Vec<Panel> = Vec::new();
         for panel in [
             Panel::Layers,
@@ -121,16 +134,28 @@ impl App {
                 continue;
             }
             let mut open = true;
+            // The default arrangement: a column on the right (layers on
+            // top, palette at the bottom), the preview beside it, and the
+            // timeline along the bottom, clear of the dock and status bar.
+            let beside_column = right - 20.0;
             let (pos, width) = match panel {
-                Panel::Layers => (egui::pos2(right, 70.0), 270.0),
-                Panel::Palette => (egui::pos2(right, 330.0), 270.0),
-                Panel::Preview => (egui::pos2(right - 210.0, 70.0), 190.0),
-                Panel::Timeline => (egui::pos2(160.0, screen.bottom() - 190.0), (screen.width() - 470.0).max(400.0)),
-                Panel::Versions | Panel::Notes => (egui::pos2(right - 330.0, 260.0), 310.0),
-                Panel::Assistant | Panel::Generate => (egui::pos2(170.0, 120.0), 360.0),
+                Panel::Layers => (egui::pos2(right, 70.0), 360.0),
+                Panel::Palette => (egui::pos2(right, screen.bottom() - 290.0), 360.0),
+                Panel::Preview => (egui::pos2(beside_column - 190.0, 150.0), 170.0),
+                Panel::Timeline => {
+                    let left = 100.0;
+                    (egui::pos2(left, screen.bottom() - 400.0), (beside_column - left - 30.0).max(400.0))
+                }
+                Panel::Versions | Panel::Notes => (egui::pos2(beside_column - 330.0, 300.0), 310.0),
+                Panel::Assistant | Panel::Generate => (egui::pos2(110.0, 120.0), 360.0),
                 _ => (screen.center() - Vec2::new(200.0, 160.0), 400.0),
             };
-            let shown = window(self, panel, pos, width).open(&mut open).show(ctx, |ui| match panel {
+            // The window's blurred backdrop goes first in its layer, under
+            // everything the window draws.
+            let layer = egui::LayerId::new(egui::Order::Middle, panel_id(panel));
+            let backdrop = self.blur().map(|blur| (blur, ctx.layer_painter(layer).add(egui::Shape::Noop)));
+            let follow_default = screen_changed && self.settings.layout.position(panel.key()).is_none();
+            let shown = window(self, panel, pos, width, follow_default).open(&mut open).show(ctx, |ui| match panel {
                 Panel::Layers => self.layers_panel(ui),
                 Panel::Palette => self.palette_panel(ui),
                 Panel::Preview => self.preview_panel(ui),
@@ -144,10 +169,19 @@ impl App {
                 Panel::NewDocument => self.new_document_panel(ui),
                 Panel::ResizeCanvas => self.resize_panel(ui),
             });
+            if let (Some((blur, slot)), Some(shown)) = (backdrop, &shown) {
+                let radius = f32::from(theme::PANEL_RADIUS);
+                ctx.layer_painter(layer).set(slot, blur.backdrop(shown.response.rect, radius));
+            }
             match shown {
                 Some(shown) if open => {
+                    // Only a drag places a panel. egui nudging it back on
+                    // screen, or the window resizing, isn't the user's choice.
                     let corner = shown.response.rect.min;
-                    self.settings.layout.remember(panel.key(), [corner.x, corner.y]);
+                    let dragged = ctx.input(|i| i.pointer.any_down()) && corner.distance(pos) > 1.5;
+                    if dragged || self.settings.layout.position(panel.key()).is_some() {
+                        self.settings.layout.remember(panel.key(), [corner.x, corner.y]);
+                    }
                 }
                 _ => toggles.push(panel),
             }
@@ -165,11 +199,12 @@ impl App {
     // ----- chrome -------------------------------------------------------
 
     fn top_bar(&mut self, ctx: &egui::Context) {
+        let blur = self.blur();
         let mut action: Option<Action> = None;
         egui::Area::new(egui::Id::new("top-bar")).anchor(Align2::LEFT_TOP, [12.0, 10.0]).show(ctx, |ui| {
-            theme::pill_frame(self.appearance()).show(ui, |ui| {
+            theme::show_glass(ui, theme::pill_frame(self.appearance()), blur.clone(), |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("◆ Spry").strong().color(theme::palette(self.appearance()).accent));
+                    ui.label(RichText::new("★ Spry").strong().color(theme::palette(self.appearance()).accent));
                     ui.menu_button("File", |ui| {
                         for (label, item) in [
                             ("New sprite…   Ctrl+N", Action::New),
@@ -281,7 +316,7 @@ impl App {
                         }
                     }
                     ui.separator();
-                    if ui.selectable_label(self.is_open(Panel::Assistant), "🤖 Assistant").clicked() {
+                    if ui.selectable_label(self.is_open(Panel::Assistant), "💬 Assistant").clicked() {
                         action = Some(Action::Toggle(Panel::Assistant));
                     }
                     if ui.selectable_label(self.is_open(Panel::Generate), "✨ Generate").clicked() {
@@ -299,7 +334,7 @@ impl App {
         // Document tabs, centred under the bar.
         if self.documents.len() > 1 {
             egui::Area::new(egui::Id::new("tabs")).anchor(Align2::CENTER_TOP, [0.0, 58.0]).show(ctx, |ui| {
-                theme::pill_frame(self.appearance()).show(ui, |ui| {
+                theme::show_glass(ui, theme::pill_frame(self.appearance()), blur.clone(), |ui| {
                     ui.horizontal(|ui| {
                         for index in 0..self.documents.len() {
                             let studio = &self.documents[index].studio;
@@ -319,8 +354,9 @@ impl App {
     }
 
     fn tool_dock(&mut self, ctx: &egui::Context) {
+        let blur = self.blur();
         egui::Area::new(egui::Id::new("tool-dock")).anchor(Align2::LEFT_CENTER, [12.0, 0.0]).show(ctx, |ui| {
-            theme::pill_frame(self.appearance()).show(ui, |ui| {
+            theme::show_glass(ui, theme::pill_frame(self.appearance()), blur.clone(), |ui| {
                 ui.vertical(|ui| {
                     ui.spacing_mut().item_spacing.y = 3.0;
                     for tool in Tool::ALL {
@@ -364,10 +400,11 @@ impl App {
     }
 
     fn tool_inspector(&mut self, ctx: &egui::Context) {
+        let blur = self.blur();
         egui::Area::new(egui::Id::new("tool-inspector"))
             .anchor(Align2::CENTER_TOP, [0.0, if self.documents.len() > 1 { 104.0 } else { 60.0 }])
             .show(ctx, |ui| {
-                theme::pill_frame(self.appearance()).show(ui, |ui| {
+                theme::show_glass(ui, theme::pill_frame(self.appearance()), blur.clone(), |ui| {
                     ui.horizontal(|ui| {
                         let tool = self.tools.tool;
                         ui.label(RichText::new(format!("{} {}", tool.icon(), tool.name())).strong());
@@ -397,8 +434,8 @@ impl App {
                             ui.label("Size");
                             ui.add(egui::DragValue::new(&mut self.tools.brush.size).range(1..=64));
                             ui.checkbox(&mut self.tools.brush.round, "Round");
-                            ui.toggle_value(&mut self.tools.brush.mirror_x, "⇆").on_hover_text("Mirror left ↔ right");
-                            ui.toggle_value(&mut self.tools.brush.mirror_y, "⇅").on_hover_text("Mirror top ↕ bottom");
+                            ui.toggle_value(&mut self.tools.brush.mirror_x, "↔").on_hover_text("Mirror left ↔ right");
+                            ui.toggle_value(&mut self.tools.brush.mirror_y, "↕").on_hover_text("Mirror top ↕ bottom");
                         }
                         match tool {
                             Tool::Pencil => {
@@ -451,7 +488,7 @@ impl App {
 
     fn pattern_picker(&mut self, ui: &mut egui::Ui) {
         ui.separator();
-        egui::ComboBox::from_id_salt("pattern").selected_text(format!("▦ {}", self.tools.pattern.name())).show_ui(
+        egui::ComboBox::from_id_salt("pattern").selected_text(format!("▣ {}", self.tools.pattern.name())).show_ui(
             ui,
             |ui| {
                 for pattern in CLASSIC_PATTERNS {
@@ -476,8 +513,9 @@ impl App {
     }
 
     fn status_bar(&mut self, ctx: &egui::Context) {
+        let blur = self.blur();
         egui::Area::new(egui::Id::new("status")).anchor(Align2::LEFT_BOTTOM, [12.0, -10.0]).show(ctx, |ui| {
-            theme::pill_frame(self.appearance()).show(ui, |ui| {
+            theme::show_glass(ui, theme::pill_frame(self.appearance()), blur.clone(), |ui| {
                 ui.horizontal(|ui| {
                     let document = self.document();
                     let sprite = document.studio.editor.sprite();
@@ -487,7 +525,7 @@ impl App {
                         ui.weak(format!("({x}, {y})"));
                     }
                     if let Some(bridge) = &self.mcp {
-                        ui.weak(format!("● MCP {}", bridge.address)).on_hover_text(bridge.url());
+                        ui.weak(format!("⏺ MCP {}", bridge.address)).on_hover_text(bridge.url());
                     }
                     if self.agent.busy {
                         ui.spinner();
@@ -520,10 +558,10 @@ impl App {
             if ui.button("📁").on_hover_text("New group").clicked() {
                 commands.push(Command::AddGroup { name: None });
             }
-            if ui.button("⧉").on_hover_text("Duplicate layer (a group copies everything in it)").clicked() {
+            if ui.button("🗐").on_hover_text("Duplicate layer (a group copies everything in it)").clicked() {
                 commands.push(Command::DuplicateLayer);
             }
-            if ui.button("⤓").on_hover_text("Merge down").clicked() {
+            if ui.button("⬇").on_hover_text("Merge down").clicked() {
                 commands.push(Command::MergeDown);
             }
             if ui.button("⏶").on_hover_text("Move up").clicked() && current + 1 < rows.len() {
@@ -590,7 +628,7 @@ impl App {
         };
         ui.horizontal(|ui| {
             ui.label("Name");
-            let response = ui.text_edit_singleline(&mut name);
+            let response = ui.add(egui::TextEdit::singleline(&mut name).desired_width(170.0));
             if response.changed() {
                 self.layer_name_draft = Some((current, name.clone()));
             }
@@ -620,8 +658,8 @@ impl App {
         if let Some(mut cel_opacity) = cel_opacity {
             ui.horizontal(|ui| {
                 ui.label("Cel");
-                let slider = egui::Slider::new(&mut cel_opacity, 0..=255).text("opacity on this frame");
-                if ui.add(slider).drag_stopped() {
+                let slider = egui::Slider::new(&mut cel_opacity, 0..=255);
+                if ui.add(slider).on_hover_text("This cel's opacity, on top of the layer's").drag_stopped() {
                     commands.push(Command::SetCelOpacity { opacity: cel_opacity });
                 }
             });
@@ -650,7 +688,7 @@ impl App {
                     }
                 }
             });
-            if ui.button("⤒").on_hover_text("Extract palette from the sprite").clicked() {
+            if ui.button("🎨").on_hover_text("Extract palette from the sprite").clicked() {
                 commands.push(Command::ExtractPalette);
             }
         });
@@ -753,7 +791,7 @@ impl App {
             if ui.button("➕ Frame").clicked() {
                 commands.push(Command::AddFrame);
             }
-            if ui.button("⧉ Copy").on_hover_text("Duplicate with independent pixels").clicked() {
+            if ui.button("🗐 Copy").on_hover_text("Duplicate with independent pixels").clicked() {
                 commands.push(Command::DuplicateFrame { as_clone: false });
             }
             if ui.button("🔗 Clone").on_hover_text("Duplicate as linked cels: painting one paints both").clicked() {
@@ -778,7 +816,7 @@ impl App {
                 commands.push(Command::SetFrameDuration { duration_ms: duration, all_frames: false });
             }
             let mut onion = document.view.onion_skin;
-            if ui.toggle_value(&mut onion, "🧅 Onion").on_hover_text("Onion skin (Tab)").clicked() {
+            if ui.toggle_value(&mut onion, "🌗 Onion").on_hover_text("Onion skin (Tab)").clicked() {
                 actions.push(Action::ToggleOnionSkin);
             }
             if onion {
@@ -837,15 +875,15 @@ impl App {
                     tag.from + 1,
                     tag.to + 1,
                     match tag.direction {
-                        LoopDirection::Forward => "→",
-                        LoopDirection::Reverse => "←",
+                        LoopDirection::Forward => "➡",
+                        LoopDirection::Reverse => "⬅",
                         LoopDirection::PingPong => "↔",
                     }
                 );
                 ui.label(label).context_menu(|ui| {
                     for (direction, name) in [
-                        (LoopDirection::Forward, "Play forward →"),
-                        (LoopDirection::Reverse, "Play in reverse ←"),
+                        (LoopDirection::Forward, "Play forward ➡"),
+                        (LoopDirection::Reverse, "Play in reverse ⬅"),
                         (LoopDirection::PingPong, "Ping-pong ↔"),
                     ] {
                         if ui.radio(tag.direction == direction, name).clicked() {
@@ -887,8 +925,8 @@ impl App {
                     );
                 });
                 ui.horizontal(|ui| {
-                    ui.radio_value(&mut form.3, LoopDirection::Forward, "→");
-                    ui.radio_value(&mut form.3, LoopDirection::Reverse, "←");
+                    ui.radio_value(&mut form.3, LoopDirection::Forward, "➡");
+                    ui.radio_value(&mut form.3, LoopDirection::Reverse, "⬅");
                     ui.radio_value(&mut form.3, LoopDirection::PingPong, "↔ ping-pong");
                 });
                 if ui.button("Add tag").clicked() {
@@ -1064,7 +1102,7 @@ impl App {
             ui.horizontal(|ui| {
                 ui.label(format!("{} ({}, {})", index + 1, pin.x, pin.y));
                 ui.label(&pin.text);
-                if ui.small_button("✕").clicked() {
+                if ui.small_button("✖").clicked() {
                     commands.push(Command::RemovePin { index });
                 }
             });
@@ -1127,7 +1165,7 @@ impl App {
                         ui.label(text);
                     }
                     ChatLine::Tool { name, ok, summary } => {
-                        let mark = if *ok { "✓" } else { "✗" };
+                        let mark = if *ok { "✔" } else { "✖" };
                         ui.small(RichText::new(format!("{mark} {name}: {summary}")).color(accent));
                     }
                     ChatLine::Error(error) => {
@@ -1353,6 +1391,8 @@ impl App {
             ui.radio_value(&mut self.settings.appearance, Appearance::Dark, "Dark glass");
             ui.radio_value(&mut self.settings.appearance, Appearance::Light, "Light glass");
         });
+        ui.checkbox(&mut self.settings.glass_blur, "Frosted glass (blur behind panels)")
+            .on_hover_text("Turn off on very slow graphics");
         ui.separator();
         ui.label(RichText::new("Assistant").strong());
         ui.horizontal(|ui| {
@@ -1499,7 +1539,7 @@ impl App {
             for row in 0..3 {
                 for column in 0..3 {
                     let chosen = (draft.column, draft.row) == (column, row);
-                    if ui.selectable_label(chosen, "●").clicked() {
+                    if ui.selectable_label(chosen, "⏺").clicked() {
                         (draft.column, draft.row) = (column, row);
                     }
                 }
@@ -1698,7 +1738,7 @@ fn on_layer(index: usize, current: usize, command: Command) -> [Command; 3] {
 }
 
 /// Aseprite's cel grid: one row per layer (top layer first), one column
-/// per frame. ■ is a cel with art, ◆ a cel linked to other frames (a
+/// per frame. ■ is a cel with art, 🔗 a cel linked to other frames (a
 /// clone), · an empty cel. Clicking a cell picks that layer and frame.
 fn cel_grid(
     ui: &mut egui::Ui,
@@ -1715,7 +1755,7 @@ fn cel_grid(
                 let has_art =
                     sprite.cel_image(LayerIndex(layer), FrameIndex(frame)).is_some_and(|image| !image.is_blank());
                 let symbol = match (has_art, sprite.is_linked(LayerIndex(layer), FrameIndex(frame))) {
-                    (true, true) => "◆",
+                    (true, true) => "🔗",
                     (true, false) => "■",
                     (false, _) => "·",
                 };

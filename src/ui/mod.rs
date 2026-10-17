@@ -7,6 +7,7 @@
 mod app;
 mod canvas;
 mod file_browser;
+mod glass_blur;
 mod panels;
 mod settings;
 mod shortcuts;
@@ -17,7 +18,9 @@ mod workers;
 
 use std::path::PathBuf;
 
-pub fn run(initial: Option<PathBuf>) -> eframe::Result<()> {
+/// Opens the window on `initial`. With `capture`, it saves a picture of
+/// the window there once it has settled, then closes.
+pub fn run(initial: Option<PathBuf>, capture: Option<PathBuf>) -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("Spry")
@@ -26,5 +29,5 @@ pub fn run(initial: Option<PathBuf>) -> eframe::Result<()> {
             .with_min_inner_size([900.0, 600.0]),
         ..Default::default()
     };
-    eframe::run_native("Spry", options, Box::new(move |cc| Ok(Box::new(app::App::new(&cc.egui_ctx, initial)))))
+    eframe::run_native("Spry", options, Box::new(move |cc| Ok(Box::new(app::App::new(&cc.egui_ctx, initial, capture)))))
 }

@@ -14,7 +14,8 @@ fn main() -> ExitCode {
         }
     };
     let outcome = match invocation {
-        Invocation::Gui(file) => spry::ui::run(file).map_err(|e| anyhow::anyhow!("{e}")),
+        Invocation::Gui(file) => spry::ui::run(file, None).map_err(|e| anyhow::anyhow!("{e}")),
+        Invocation::Capture { out, file } => spry::ui::run(file, Some(out)).map_err(|e| anyhow::anyhow!("{e}")),
         Invocation::Mcp(file) => serve_mcp(file),
         headless => cli::run_headless(headless).map(|output| println!("{output}")),
     };

@@ -13,10 +13,11 @@ models can sketch ideas that land on your grid and in your palette.
 
 ```sh
 cargo run --release                       # the editor
-cargo run --release -- hero.spry          # open a file (.spry, .png or .gif)
+cargo run --release -- hero.spry          # open a file (.spry, .aseprite, .png or .gif)
 cargo run --release -- mcp hero.spry      # serve MCP over stdio for an agent
 cargo run --release -- export hero.spry --sheet hero.png --layout packed --trim --merge
 cargo run --release -- info hero.spry
+cargo run --release -- capture shot.png hero.spry   # save a picture of the window
 ```
 
 On Linux the window needs the usual X11/Wayland and OpenGL libraries.
@@ -103,7 +104,8 @@ backdrop, and quantised to your palette before they arrive as a new layer
 in the document they were asked for. img2img restyles the current frame on
 both backends. ComfyUI can also use your own exported API workflow.
 
-**Glass UI.** A luminous backdrop, translucent panels you can float anywhere,
+**Glass UI.** A luminous backdrop, frosted panels (a real GPU blur of what's
+behind them) you can float anywhere, remembered where you leave them,
 dark and light glass, a command palette (Ctrl+K) that reaches every action,
 Aseprite shortcuts (B, E, G, I, L, U, M, V, X, Alt+[ / Alt+], Enter to play,
 Tab for onion skin), zoom about the cursor, space/middle-drag to pan, a pixel
