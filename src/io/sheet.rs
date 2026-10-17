@@ -9,6 +9,7 @@
 //! **In:** a sheet PNG is sliced back into frames, by a cell size you give or
 //! by finding the transparent gutters between sprites.
 
+use crate::editor::limits;
 use crate::editor::playback::play_order;
 use crate::editor::{LoopDirection, Pixels, Rect, Sprite};
 use serde::{Deserialize, Serialize};
@@ -96,6 +97,7 @@ struct Cutout {
 
 pub fn build(sprite: &Sprite, title: &str, options: &SheetOptions) -> Result<SpriteSheet, String> {
     let scale = options.scale.max(1);
+    limits::check_export_size(sprite.width, sprite.height, scale)?;
     let frames = frames_to_export(sprite, options.tag.as_deref())?;
 
     let mut cutouts: Vec<Cutout> = Vec::new();
@@ -120,6 +122,9 @@ pub fn build(sprite: &Sprite, title: &str, options: &SheetOptions) -> Result<Spr
 
     let sizes: Vec<(u32, u32)> = cutouts.iter().map(|c| (c.pixels.width(), c.pixels.height())).collect();
     let (positions, sheet_width, sheet_height) = lay_out(&sizes, options);
+    limits::check_export_size(sheet_width, sheet_height, 1).map_err(|_| {
+        format!("a {sheet_width}×{sheet_height} sheet is too big; try a grid layout or a smaller scale")
+    })?;
     let mut image = Pixels::new(sheet_width, sheet_height);
     for (cutout, &(x, y)) in cutouts.iter().zip(&positions) {
         image.paste(&cutout.pixels, x, y);

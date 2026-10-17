@@ -10,6 +10,7 @@ pub mod command;
 pub mod dither;
 pub mod document;
 pub mod effects;
+pub mod limits;
 pub mod palette;
 pub mod pixelate;
 pub mod pixels;

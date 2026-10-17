@@ -5,7 +5,7 @@ pub mod raster_formats;
 pub mod sheet;
 pub mod spry_file;
 
-use crate::editor::{Document, Pixels, Sprite};
+use crate::editor::{limits, Document, Pixels, Sprite};
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
@@ -19,7 +19,7 @@ pub fn open(path: &Path) -> Result<Document> {
     match extension_of(path).as_str() {
         "spry" => spry_file::decode(&bytes).with_context(|| format!("opening {}", path.display())),
         "gif" => document_from_animation(decode_gif(&bytes)?),
-        _ => Ok(document_from_image(decode_image(&bytes)?)),
+        _ => document_from_image(decode_image(&bytes)?),
     }
 }
 
@@ -31,14 +31,16 @@ fn extension_of(path: &Path) -> String {
     path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase()
 }
 
-pub fn document_from_image(image: Pixels) -> Document {
+pub fn document_from_image(image: Pixels) -> Result<Document> {
+    limits::check_canvas_size(image.width(), image.height()).map_err(anyhow::Error::msg)?;
     let mut sprite = Sprite::new(image.width(), image.height());
     *sprite.cel_image_mut(0, 0) = image;
-    Document::new(sprite)
+    Ok(Document::new(sprite))
 }
 
 pub fn document_from_animation(frames: Vec<(Pixels, u32)>) -> Result<Document> {
     let (first, _) = frames.first().context("the animation has no frames")?;
+    limits::check_canvas_size(first.width(), first.height()).map_err(anyhow::Error::msg)?;
     let mut sprite = Sprite::new(first.width(), first.height());
     for (index, (image, delay)) in frames.into_iter().enumerate() {
         if index > 0 {
@@ -63,6 +65,7 @@ pub fn document_from_sheet(sheet: &Pixels, cell_width: u32, cell_height: u32) ->
 }
 
 pub fn export_png(path: &Path, sprite: &Sprite, frame: usize, scale: u32) -> Result<()> {
+    limits::check_export_size(sprite.width, sprite.height, scale).map_err(anyhow::Error::msg)?;
     let bytes = encode_png(&sprite.composite(frame).scaled_up(scale))?;
     std::fs::write(path, bytes).with_context(|| format!("writing {}", path.display()))
 }
@@ -74,6 +77,7 @@ pub fn export_gif(path: &Path, sprite: &Sprite, tag: Option<&str>, scale: u32) -
         ),
         None => None,
     };
+    limits::check_export_size(sprite.width, sprite.height, scale).map_err(anyhow::Error::msg)?;
     let frames = raster_formats::animation_frames(sprite, tag, scale);
     std::fs::write(path, encode_gif(&frames)?).with_context(|| format!("writing {}", path.display()))
 }

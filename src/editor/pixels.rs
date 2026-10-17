@@ -77,11 +77,11 @@ impl Pixels {
     }
 
     pub fn filled(width: u32, height: u32, colour: Rgba) -> Self {
-        Pixels { width, height, data: vec![colour; (width * height) as usize] }
+        Pixels { width, height, data: vec![colour; width as usize * height as usize] }
     }
 
     pub fn from_rgba_bytes(width: u32, height: u32, bytes: &[u8]) -> Option<Self> {
-        if bytes.len() != (width * height * 4) as usize {
+        if Some(bytes.len()) != (width as usize).checked_mul(height as usize).and_then(|n| n.checked_mul(4)) {
             return None;
         }
         let data = bytes.chunks_exact(4).map(|c| Rgba([c[0], c[1], c[2], c[3]])).collect();
@@ -109,7 +109,7 @@ impl Pixels {
     }
 
     fn index(&self, x: i32, y: i32) -> Option<usize> {
-        self.contains(x, y).then(|| (y as u32 * self.width + x as u32) as usize)
+        self.contains(x, y).then(|| y as usize * self.width as usize + x as usize)
     }
 
     pub fn get(&self, x: i32, y: i32) -> Rgba {
@@ -207,7 +207,7 @@ impl Pixels {
     /// block, which is the only honest way to enlarge pixel art.
     pub fn scaled_up(&self, factor: u32) -> Pixels {
         let factor = factor.max(1);
-        let mut out = Pixels::new(self.width * factor, self.height * factor);
+        let mut out = Pixels::new(self.width.saturating_mul(factor), self.height.saturating_mul(factor));
         for (x, y) in out.bounds().points() {
             out.set(x, y, self.get(x / factor as i32, y / factor as i32));
         }

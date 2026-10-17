@@ -16,6 +16,7 @@ use super::command::{Brush, Command, Ink, PixelValue};
 use super::dither::gradient_is_primary;
 use super::document::Document;
 use super::effects;
+use super::limits;
 use super::palette::Palette;
 use super::pixelate::quantise;
 use super::pixels::{Pixels, Rect};
@@ -200,6 +201,7 @@ impl Editor {
     /// exactly as it was.
     pub fn execute(&mut self, command: Command) -> EditResult {
         self.finish_stroke();
+        limits::check(&command, self.sprite().width, self.sprite().height).map_err(EditError::Invalid)?;
         match command {
             Command::Undo => return self.undo(),
             Command::Redo => return self.redo(),
@@ -319,6 +321,10 @@ impl Editor {
     pub fn begin_stroke(&mut self, at: Point, ink: Ink, brush: Brush, kind: StrokeKind) -> Result<(), EditError> {
         self.finish_stroke();
         self.ensure_drawable()?;
+        limits::check_brush(&brush).map_err(EditError::Invalid)?;
+        if let StrokeKind::Spray { radius, density } = kind {
+            limits::check_spray(radius, density).map_err(EditError::Invalid)?;
+        }
         let before_snapshot = self.snapshot();
         let before = self.current_image_or_blank();
         let redo_before = self.redo_stack.clone();
@@ -682,9 +688,6 @@ impl Editor {
             }
 
             Command::ResizeCanvas { width, height, offset_x, offset_y } => {
-                if width == 0 || height == 0 || width > 4096 || height > 4096 {
-                    return Err(EditError::Invalid("canvas sizes run from 1 to 4096 pixels".into()));
-                }
                 self.anchor_floating();
                 self.selection = None;
                 self.document.sprite.resize_canvas(width, height, offset_x, offset_y);

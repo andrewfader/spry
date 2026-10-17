@@ -341,10 +341,9 @@ pub fn call(studio: &mut Studio, name: &str, args: &Value) -> ToolResult {
         "document_info" => Ok(ToolOutput::text(describe(studio))),
         "new_document" => {
             let (width, height) = (required_integer(args, "width")?, required_integer(args, "height")?);
-            if !(1..=4096).contains(&width) || !(1..=4096).contains(&height) {
-                return Err("width and height must be between 1 and 4096".into());
-            }
-            *studio = Studio::new(width as u32, height as u32);
+            let (width, height) = (width.clamp(0, u32::MAX as i64) as u32, height.clamp(0, u32::MAX as i64) as u32);
+            crate::editor::limits::check_canvas_size(width, height)?;
+            *studio = Studio::new(width, height);
             if let Some(palette) = string(args, "palette") {
                 run(studio, Command::UseBuiltInPalette { name: palette.into() })?;
             }
@@ -366,8 +365,10 @@ pub fn call(studio: &mut Studio, name: &str, args: &Value) -> ToolResult {
                 return Err(format!("there is no frame {frame}"));
             }
             let sprite = studio.editor.sprite();
+            // A preview never needs to be wider than 1024 pixels.
+            let widest_scale = (1024 / sprite.width.max(sprite.height)).clamp(1, 32);
             let auto_scale = (256 / sprite.width.max(sprite.height)).clamp(1, 32);
-            let scale = integer(args, "scale").map_or(auto_scale, |s| s.clamp(1, 32) as u32);
+            let scale = integer(args, "scale").map_or(auto_scale, |s| s.clamp(1, 32) as u32).min(widest_scale);
             let image = studio.editor.composite_for_display(frame).scaled_up(scale);
             let png = io::encode_png(&image).map_err(|e| e.to_string())?;
             Ok(ToolOutput { text: format!("frame {frame} at {scale}×"), png: Some(png) })

@@ -155,6 +155,34 @@ fn tool_mistakes_come_back_as_readable_errors_not_crashes() {
 }
 
 #[test]
+fn absurd_sizes_from_a_model_are_refused_without_taking_the_machine_down() {
+    let mut session = McpSession::launch(&[]);
+    session.request("initialize", json!({}));
+    let refusals = [
+        ("new_document", json!({ "width": 65536, "height": 65536 }), "canvas sizes"),
+        ("draw_line", json!({ "from": [0, 0], "to": [2147483647, 2147483647], "colour": "#000000" }), "too far off"),
+        (
+            "run_command",
+            json!({ "command": { "command": "spray", "at": [1, 1], "ink": { "type": "erase" }, "radius": 4, "density": 4294967295u64 } }),
+            "density",
+        ),
+        (
+            "run_command",
+            json!({ "command": { "command": "resize_canvas", "width": 100000, "height": 4 } }),
+            "canvas sizes",
+        ),
+    ];
+    for (tool, arguments, reason) in refusals {
+        let result = session.call(tool, arguments.clone());
+        assert_eq!(result["isError"], true, "{tool} {arguments} should be refused, got {result}");
+        let said = result["content"][0]["text"].as_str().unwrap_or_default();
+        assert!(said.contains(reason), "{tool} was refused for the wrong reason: {said}");
+    }
+    let still_alive = session.request("ping", json!({}));
+    assert_eq!(still_alive["result"], json!({}));
+}
+
+#[test]
 fn the_http_bridge_serves_the_same_tools_to_the_running_app() {
     let bridge = spry::mcp::http::HttpBridge::start(0, || {}).unwrap();
     let url = bridge.url();
