@@ -66,6 +66,28 @@ impl Panel {
         Panel::ResizeCanvas,
     ];
 
+    /// A stable name for saved layouts, independent of the title.
+    pub fn key(self) -> &'static str {
+        match self {
+            Panel::Layers => "layers",
+            Panel::Timeline => "timeline",
+            Panel::Palette => "palette",
+            Panel::Preview => "preview",
+            Panel::Versions => "versions",
+            Panel::Notes => "notes",
+            Panel::Assistant => "assistant",
+            Panel::Generate => "generate",
+            Panel::Export => "export",
+            Panel::Settings => "settings",
+            Panel::NewDocument => "new_document",
+            Panel::ResizeCanvas => "resize_canvas",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Panel> {
+        Panel::ALL.into_iter().find(|panel| panel.key() == key)
+    }
+
     pub fn title(self) -> &'static str {
         match self {
             Panel::Layers => "Layers",
@@ -116,6 +138,7 @@ pub enum Action {
     PreviousFrame,
     NextFrame,
     CommandPalette,
+    ResetLayout,
 }
 
 /// The new size, and which of the nine anchor cells (column and row, 0 to
@@ -180,6 +203,8 @@ pub struct App {
     pub version_message: String,
     pub sheet_cell: (u32, u32),
     pub closing: Option<Closing>,
+    /// Set for one frame after Reset layout, to move every panel home.
+    pub layout_reset_pending: bool,
     /// The version the Versions panel is comparing with now.
     pub selected_version: Option<u32>,
     /// The last pixel-diff count, keyed by (document, version, revision).
@@ -224,10 +249,16 @@ impl App {
             version_message: String::new(),
             sheet_cell: (16, 16),
             closing: None,
+            layout_reset_pending: false,
             selected_version: None,
             version_diff: None,
             quit_confirmed: false,
         };
+        let saved_panels: std::collections::HashSet<Panel> =
+            app.settings.layout.open.iter().filter_map(|key| Panel::from_key(key)).collect();
+        if !saved_panels.is_empty() {
+            app.open_panels = saved_panels;
+        }
         match initial.map(|path| Studio::open(&path).map(|studio| (studio, path))) {
             Some(Ok((studio, path))) => {
                 app.settings.remember_file(&path);
@@ -348,6 +379,11 @@ impl App {
                 let step = if action == Action::NextFrame { 1 } else { count - 1 };
                 let target = (editor.frame + step) % count;
                 let _ = editor.execute(Command::SelectFrame { index: target });
+            }
+            Action::ResetLayout => {
+                self.settings.layout.reset();
+                self.layout_reset_pending = true;
+                self.status = "Panels are back in their default places".into();
             }
             Action::CommandPalette => {
                 self.palette_open = !self.palette_open;
@@ -844,6 +880,9 @@ impl eframe::App for App {
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        let mut open: Vec<String> = self.open_panels.iter().map(|panel| panel.key().to_string()).collect();
+        open.sort();
+        self.settings.layout.open = open;
         self.persist_settings();
     }
 }
@@ -863,6 +902,14 @@ mod tests {
         let mut draft = ResizeDraft { width: 32, height: 32, column: 2, row: 2 };
         draft.width = 40;
         assert_eq!(draft.offsets_from(32, 32), (8, 0));
+    }
+
+    #[test]
+    fn every_panel_has_its_own_saved_layout_key() {
+        for panel in Panel::ALL {
+            assert_eq!(Panel::from_key(panel.key()), Some(panel));
+        }
+        assert_eq!(Panel::from_key("toolbox"), None, "an old or unknown key is ignored, not a crash");
     }
 
     #[test]

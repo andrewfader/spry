@@ -35,6 +35,39 @@ pub struct Settings {
     pub mcp_port: u16,
     pub recent_files: Vec<PathBuf>,
     pub last_directory: Option<PathBuf>,
+    pub layout: PanelLayout,
+}
+
+/// Where you left the floating panels, and which were open, so Spry comes
+/// back the way you arranged it.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PanelLayout {
+    /// Panel keys, such as "layers". Empty means the first-run set.
+    pub open: Vec<String>,
+    /// Each panel's top-left corner, in points.
+    pub positions: std::collections::BTreeMap<String, [f32; 2]>,
+}
+
+impl PanelLayout {
+    pub fn position(&self, key: &str) -> Option<[f32; 2]> {
+        self.positions.get(key).copied()
+    }
+
+    /// Notes where a panel now sits. Sub-pixel jitter doesn't count as a
+    /// move, so this doesn't churn. Returns whether anything changed.
+    pub fn remember(&mut self, key: &str, at: [f32; 2]) -> bool {
+        let moved = self.position(key).is_none_or(|old| (old[0] - at[0]).abs() > 0.5 || (old[1] - at[1]).abs() > 0.5);
+        if moved {
+            self.positions.insert(key.to_string(), at);
+        }
+        moved
+    }
+
+    /// Forgets every position, so panels go back to their default places.
+    pub fn reset(&mut self) {
+        self.positions.clear();
+    }
 }
 
 impl Default for Settings {
@@ -55,6 +88,7 @@ impl Default for Settings {
             mcp_port: DEFAULT_PORT,
             recent_files: Vec::new(),
             last_directory: None,
+            layout: PanelLayout::default(),
         }
     }
 }
@@ -133,6 +167,20 @@ mod tests {
         let settings: Settings = serde_json::from_str(r#"{"ollama_model":"phi"}"#).unwrap();
         assert_eq!(settings.ollama_model, "phi");
         assert_eq!(settings.mcp_port, DEFAULT_PORT);
+    }
+
+    #[test]
+    fn panel_positions_are_remembered_and_survive_a_restart() {
+        let mut settings = Settings::default();
+        assert!(settings.layout.remember("layers", [900.0, 70.0]));
+        assert!(!settings.layout.remember("layers", [900.2, 70.1]), "jitter isn't a move");
+        settings.layout.open = vec!["layers".into(), "notes".into()];
+        let reloaded: Settings = serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+        assert_eq!(reloaded.layout.position("layers"), Some([900.0, 70.0]));
+        assert_eq!(reloaded.layout.open, vec!["layers", "notes"]);
+        let mut reset = reloaded.layout;
+        reset.reset();
+        assert_eq!(reset.position("layers"), None);
     }
 
     #[test]

@@ -74,14 +74,23 @@ fn swatch(ui: &mut egui::Ui, colour: Rgba, size: f32, selected: bool) -> egui::R
 }
 
 /// Lays out a panel the first time it appears, relative to the screen.
-fn window(app: &App, panel: Panel, pos: egui::Pos2, width: f32) -> egui::Window<'static> {
-    egui::Window::new(panel.title())
+/// A floating glass panel, where it was left last time (or at `home` the
+/// first time, and after Reset layout). It's kept on screen.
+fn window(app: &App, panel: Panel, home: egui::Pos2, width: f32) -> egui::Window<'static> {
+    let saved = app.settings.layout.position(panel.key()).map(|[x, y]| egui::pos2(x, y));
+    let window = egui::Window::new(panel.title())
         .id(egui::Id::new(("panel", panel.title())))
         .frame(app.glass())
-        .default_pos(pos)
+        .default_pos(saved.unwrap_or(home))
         .default_width(width)
+        .constrain(true)
         .collapsible(true)
-        .resizable(true)
+        .resizable(true);
+    if app.layout_reset_pending {
+        window.current_pos(home)
+    } else {
+        window
+    }
 }
 
 impl App {
@@ -135,10 +144,15 @@ impl App {
                 Panel::NewDocument => self.new_document_panel(ui),
                 Panel::ResizeCanvas => self.resize_panel(ui),
             });
-            if !open || shown.is_none() {
-                toggles.push(panel);
+            match shown {
+                Some(shown) if open => {
+                    let corner = shown.response.rect.min;
+                    self.settings.layout.remember(panel.key(), [corner.x, corner.y]);
+                }
+                _ => toggles.push(panel),
             }
         }
+        self.layout_reset_pending = false;
         for panel in toggles {
             self.open_panels.remove(&panel);
         }
@@ -244,6 +258,7 @@ impl App {
                             ("Onion skin   Tab", Action::ToggleOnionSkin),
                             ("Tiled preview (seamless check)", Action::ToggleTiledPreview),
                             ("Light / dark glass", Action::ToggleAppearance),
+                            ("Reset panel layout", Action::ResetLayout),
                         ] {
                             if ui.button(label).clicked() {
                                 action = Some(item);
@@ -1574,6 +1589,7 @@ fn palette_entries(primary: Rgba) -> Vec<(String, Action)> {
         ("Toggle light / dark glass".into(), Action::ToggleAppearance),
         ("Previous frame".into(), Action::PreviousFrame),
         ("Next frame".into(), Action::NextFrame),
+        ("Reset panel layout".into(), Action::ResetLayout),
     ];
     // "New sprite" above already opens the new-sprite panel.
     for panel in Panel::ALL.into_iter().filter(|&panel| panel != Panel::NewDocument) {
@@ -1745,6 +1761,7 @@ mod tests {
             Action::ToggleAppearance,
             Action::PreviousFrame,
             Action::NextFrame,
+            Action::ResetLayout,
         ];
         for kind in &kinds {
             match kind {
@@ -1775,7 +1792,8 @@ mod tests {
                 | Action::ToggleTiledPreview
                 | Action::ToggleAppearance
                 | Action::PreviousFrame
-                | Action::NextFrame => {}
+                | Action::NextFrame
+                | Action::ResetLayout => {}
                 // Opening the palette from the palette, and the onion-skin
                 // sliders, aren't things to search for by name.
                 Action::CommandPalette | Action::OnionSkin { .. } => unreachable!("not listed above"),
