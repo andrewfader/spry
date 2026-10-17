@@ -28,6 +28,7 @@ flate2 = "1"
 gif = "0.14"
 image = { version = "0.25", default-features = false, features = ["png", "gif", "webp"] }
 png = "0.18"
+image-webp = "0.2"
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 tiny_http = "0.12"

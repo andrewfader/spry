@@ -22,6 +22,7 @@ EXPORT OPTIONS:
   --gif OUT        animated GIF (see --tag)
   --apng OUT       animated PNG: full alpha, exact delays (see --tag)
   --webp OUT       one frame as lossless WebP (see --frame)
+  --webp-anim OUT  animated lossless WebP: full alpha, exact delays (see --tag)
   --sheet OUT      sprite sheet PNG plus Aseprite JSON beside it
   --frame N        frame to export with --png or --webp (default 0)
   --tag NAME       only this tag's frames (--gif, --apng, --sheet)
@@ -52,6 +53,7 @@ pub enum ExportTarget {
     Gif(PathBuf),
     Apng(PathBuf),
     Webp(PathBuf),
+    AnimatedWebp(PathBuf),
     Sheet(PathBuf),
 }
 
@@ -93,6 +95,7 @@ fn parse_export(words: Vec<&str>) -> Result<Invocation> {
             "--gif" => target = Some(ExportTarget::Gif(value()?.into())),
             "--apng" => target = Some(ExportTarget::Apng(value()?.into())),
             "--webp" => target = Some(ExportTarget::Webp(value()?.into())),
+            "--webp-anim" => target = Some(ExportTarget::AnimatedWebp(value()?.into())),
             "--sheet" => target = Some(ExportTarget::Sheet(value()?.into())),
             "--frame" => options.frame = number(value()?)? as usize,
             "--tag" => options.tag = Some(value()?.to_string()),
@@ -114,7 +117,7 @@ fn parse_export(words: Vec<&str>) -> Result<Invocation> {
     };
     options.sheet.tag = options.tag.clone();
     options.sheet.scale = options.scale;
-    let target = target.context("say what to export: --png, --gif, --apng, --webp or --sheet")?;
+    let target = target.context("say what to export: --png, --gif, --apng, --webp, --webp-anim or --sheet")?;
     Ok(Invocation::Export { source, target, options })
 }
 
@@ -146,6 +149,10 @@ pub fn run_headless(invocation: Invocation) -> Result<String> {
                 }
                 ExportTarget::Apng(out) => {
                     io::export_apng(&out, sprite, options.tag.as_deref(), options.scale)?;
+                    Ok(format!("wrote {}", out.display()))
+                }
+                ExportTarget::AnimatedWebp(out) => {
+                    io::export_animated_webp(&out, sprite, options.tag.as_deref(), options.scale)?;
                     Ok(format!("wrote {}", out.display()))
                 }
                 ExportTarget::Webp(out) => {

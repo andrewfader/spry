@@ -117,6 +117,7 @@ pub enum Action {
     ExportGif,
     ExportApng,
     ExportWebp,
+    ExportAnimatedWebp,
     ExportSheet,
     ExportSequence,
     ImportSheet,
@@ -340,6 +341,9 @@ impl App {
             Action::ExportGif => self.browse(Purpose::ExportGif, &format!("{}.gif", self.studio().title())),
             Action::ExportApng => self.browse(Purpose::ExportApng, &format!("{}-anim.png", self.studio().title())),
             Action::ExportWebp => self.browse(Purpose::ExportWebp, &format!("{}.webp", self.studio().title())),
+            Action::ExportAnimatedWebp => {
+                self.browse(Purpose::ExportAnimatedWebp, &format!("{}-anim.webp", self.studio().title()))
+            }
             Action::ExportSheet => self.browse(Purpose::ExportSheet, &format!("{}-sheet.png", self.studio().title())),
             Action::ExportSequence => self.browse(Purpose::ExportSequence, ""),
             Action::ImportSheet => self.browse(Purpose::ImportSheet, ""),
@@ -577,6 +581,10 @@ impl App {
             }
             Purpose::ExportApng => report(
                 io::export_apng(&path, &sprite, self.preview_tag.as_deref(), scale)
+                    .map(|_| format!("Exported {}", path.display())),
+            ),
+            Purpose::ExportAnimatedWebp => report(
+                io::export_animated_webp(&path, &sprite, self.preview_tag.as_deref(), scale)
                     .map(|_| format!("Exported {}", path.display())),
             ),
             Purpose::ExportWebp => {

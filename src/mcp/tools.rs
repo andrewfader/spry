@@ -270,8 +270,8 @@ pub fn catalogue() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "export_webp",
-            description: "Write one frame as a lossless WebP.",
-            input_schema: object_schema(json!({ "path": { "type": "string" }, "frame": { "type": "integer" }, "scale": { "type": "integer", "minimum": 1 } }), &["path"]),
+            description: "Write one frame as a lossless WebP, or with `animated` the whole animation (or one `tag`) with exact delays.",
+            input_schema: object_schema(json!({ "path": { "type": "string" }, "frame": { "type": "integer" }, "animated": { "type": "boolean" }, "tag": { "type": "string" }, "scale": { "type": "integer", "minimum": 1 } }), &["path"]),
         },
         ToolSpec {
             name: "export_sheet",
@@ -444,6 +444,7 @@ fn call_on_studio(studio: &mut Studio, name: &str, args: &Value) -> ToolResult {
         "list_versions" => Ok(ToolOutput::text(versions_text(studio))),
         "restore_version" => run(studio, Command::RestoreVersion { id: required_integer(args, "id")?.max(0) as u32 }),
         "export_png" => export(studio, args, Export::Png),
+        "export_webp" if flag(args, "animated").unwrap_or(false) => export(studio, args, Export::AnimatedWebp),
         "export_webp" => export(studio, args, Export::Webp),
         "export_gif" => export(studio, args, Export::Gif),
         "export_apng" => export(studio, args, Export::Apng),
@@ -597,6 +598,7 @@ enum Export {
     Webp,
     Gif,
     Apng,
+    AnimatedWebp,
 }
 
 /// Writes the file. Its extension is always forced to match its format,
@@ -621,6 +623,10 @@ fn export(studio: &mut Studio, args: &Value, format: Export) -> ToolResult {
         Export::Apng => {
             let path = export_path(args, "png")?;
             io::export_apng(&path, sprite, tag, scale).map(|_| path)
+        }
+        Export::AnimatedWebp => {
+            let path = export_path(args, "webp")?;
+            io::export_animated_webp(&path, sprite, tag, scale).map(|_| path)
         }
     }
     .map_err(|e| format!("{e:#}"))?;

@@ -3005,6 +3005,7 @@ dependencies = [
  "flate2",
  "gif",
  "image",
+ "image-webp",
  "png",
  "serde",
  "serde_json",

@@ -11,7 +11,10 @@ use crate::editor::{FrameIndex, LayerIndex};
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
-pub use raster_formats::{decode_apng, decode_gif, decode_image, encode_apng, encode_gif, encode_png, encode_webp};
+pub use raster_formats::{
+    decode_animated_webp, decode_apng, decode_gif, decode_image, encode_animated_webp, encode_apng, encode_gif,
+    encode_png, encode_webp,
+};
 pub use sheet::{SheetLayout, SheetOptions, SpriteSheet};
 
 /// Opens anything Spry can read: a `.spry` document, or an Aseprite file,
@@ -117,6 +120,12 @@ pub fn export_apng(path: &Path, sprite: &Sprite, tag: Option<&str>, scale: u32) 
     limits::check_export_size(sprite.width, sprite.height, scale).map_err(anyhow::Error::msg)?;
     let frames = raster_formats::animation_frames(sprite, find_tag(sprite, tag)?, scale);
     std::fs::write(path, encode_apng(&frames)?).with_context(|| format!("writing {}", path.display()))
+}
+
+pub fn export_animated_webp(path: &Path, sprite: &Sprite, tag: Option<&str>, scale: u32) -> Result<()> {
+    limits::check_export_size(sprite.width, sprite.height, scale).map_err(anyhow::Error::msg)?;
+    let frames = raster_formats::animation_frames(sprite, find_tag(sprite, tag)?, scale);
+    std::fs::write(path, encode_animated_webp(&frames)?).with_context(|| format!("writing {}", path.display()))
 }
 
 pub fn export_webp(path: &Path, sprite: &Sprite, frame: usize, scale: u32) -> Result<()> {

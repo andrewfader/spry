@@ -70,7 +70,7 @@ on the canvas. They're saved in the file and exported in the sheet JSON.
 
 **Exports.** PNG at 1–16× (nearest neighbour only), animated GIF with
 transparency and frame delays rounded to GIF's 10 ms steps without drifting (whole animation or one tag), animated PNG (APNG) with full alpha and exact
-delays, lossless WebP frames, PNG sequences,
+delays, lossless WebP (one frame or animated, exact delays), PNG sequences,
 and sprite sheets (strip, grid, or shelf-packed, with padding, border,
 trimming and duplicate merging) with Aseprite-format JSON (`frames`,
 `frameTags`, `slices`, plus Spry's `notes`). It can also import a sheet back

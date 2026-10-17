@@ -2,7 +2,8 @@
 //!
 //! APNG is the better animated format for pixel art: full 8-bit alpha and
 //! delays to the millisecond, where GIF has one-bit transparency and 10 ms
-//! steps. WebP is written lossless, for a single frame.
+//! steps. WebP is written lossless, as one picture or as an animation with
+//! the same exact delays.
 //!
 //! Exports are always nearest-neighbour scaled. A pixel art export that
 //! blurs is a bug. GIFs honour every frame's duration and keep full
@@ -11,7 +12,7 @@
 
 use crate::editor::playback::play_order;
 use crate::editor::{Pixels, Sprite, Tag};
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, ensure, Context, Result};
 use std::collections::HashMap;
 use std::io::Cursor;
 
@@ -132,6 +133,97 @@ pub fn encode_webp(pixels: &Pixels) -> Result<Vec<u8>> {
         .write_to(&mut Cursor::new(&mut bytes), image::ImageFormat::WebP)
         .context("encoding WebP")?;
     Ok(bytes)
+}
+
+/// An animated, lossless WebP that loops forever.
+///
+/// The encoder Spry uses only writes single pictures, so each frame is
+/// encoded on its own and its `VP8L` bitstream is wrapped in the animation
+/// container from the WebP spec: a `VP8X` header with the animation flag, an
+/// `ANIM` chunk (loop forever), and one `ANMF` chunk per frame. Every frame
+/// covers the whole canvas and replaces the last one (no blending, no
+/// disposal), so what you drew is exactly what plays.
+pub fn encode_animated_webp(frames: &[(Pixels, u32)]) -> Result<Vec<u8>> {
+    let Some((first, _)) = frames.first() else { bail!("an animation needs at least one frame") };
+    let (width, height) = (first.width(), first.height());
+    ensure!(width <= 1 << 24 && height <= 1 << 24, "WebP canvases are at most 16777216 pixels on a side");
+    let mut body = Vec::new();
+    body.extend_from_slice(b"WEBP");
+    let mut header = vec![VP8X_ANIMATION | VP8X_ALPHA, 0, 0, 0];
+    header.extend_from_slice(&u24(width - 1));
+    header.extend_from_slice(&u24(height - 1));
+    push_chunk(&mut body, b"VP8X", &header);
+    // Background colour (unused, since every frame covers the canvas), then
+    // a loop count of 0, meaning forever.
+    push_chunk(&mut body, b"ANIM", &[0, 0, 0, 0, 0, 0]);
+    for (image, delay_ms) in frames {
+        let mut frame = Vec::new();
+        frame.extend_from_slice(&u24(0)); // x / 2
+        frame.extend_from_slice(&u24(0)); // y / 2
+        frame.extend_from_slice(&u24(image.width() - 1));
+        frame.extend_from_slice(&u24(image.height() - 1));
+        frame.extend_from_slice(&u24((*delay_ms).clamp(1, (1 << 24) - 1)));
+        frame.push(ANMF_NO_BLENDING);
+        push_chunk(&mut frame, b"VP8L", &lossless_bitstream(image)?);
+        push_chunk(&mut body, b"ANMF", &frame);
+    }
+    let mut bytes = Vec::with_capacity(body.len() + 8);
+    bytes.extend_from_slice(b"RIFF");
+    bytes.extend_from_slice(&(body.len() as u32).to_le_bytes());
+    bytes.extend_from_slice(&body);
+    Ok(bytes)
+}
+
+const VP8X_ANIMATION: u8 = 1 << 1;
+const VP8X_ALPHA: u8 = 1 << 4;
+const ANMF_NO_BLENDING: u8 = 1 << 1;
+
+fn u24(value: u32) -> [u8; 3] {
+    let [a, b, c, _] = value.to_le_bytes();
+    [a, b, c]
+}
+
+/// A RIFF chunk: four-letter name, little-endian length, data, and a pad
+/// byte to keep the next chunk on an even offset.
+fn push_chunk(out: &mut Vec<u8>, name: &[u8; 4], data: &[u8]) {
+    out.extend_from_slice(name);
+    out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+    out.extend_from_slice(data);
+    if data.len() % 2 == 1 {
+        out.push(0);
+    }
+}
+
+/// The raw `VP8L` data of one frame, lifted out of the simple single-image
+/// file the encoder writes (`RIFF`, size, `WEBP`, `VP8L`, size, data).
+fn lossless_bitstream(image: &Pixels) -> Result<Vec<u8>> {
+    let mut file = Vec::new();
+    image_webp::WebPEncoder::new(&mut file)
+        .encode(&image.to_rgba_bytes(), image.width(), image.height(), image_webp::ColorType::Rgba8)
+        .context("encoding a WebP frame")?;
+    ensure!(file.len() >= 20 && &file[12..16] == b"VP8L", "the WebP encoder wrote an unexpected layout");
+    let length = u32::from_le_bytes([file[16], file[17], file[18], file[19]]) as usize;
+    file.get(20..20 + length).map(<[u8]>::to_vec).context("the WebP frame is shorter than it says")
+}
+
+/// Every frame of an animated WebP as `(image, delay_ms)`.
+pub fn decode_animated_webp(bytes: &[u8]) -> Result<Vec<(Pixels, u32)>> {
+    let mut decoder = image_webp::WebPDecoder::new(Cursor::new(bytes)).context("that file isn't a WebP")?;
+    ensure!(decoder.is_animated(), "that WebP isn't animated");
+    let (width, height) = decoder.dimensions();
+    let mut buffer = vec![0; decoder.output_buffer_size().context("the WebP is too large")?];
+    let mut frames = Vec::new();
+    for _ in 0..decoder.num_frames() {
+        let delay = decoder.read_frame(&mut buffer).context("reading a WebP frame")?;
+        let image = if decoder.has_alpha() {
+            Pixels::from_rgba_bytes(width, height, &buffer)
+        } else {
+            let rgba: Vec<u8> = buffer.chunks_exact(3).flat_map(|c| [c[0], c[1], c[2], 255]).collect();
+            Pixels::from_rgba_bytes(width, height, &rgba)
+        };
+        frames.push((image.context("WebP frame size mismatch")?, delay));
+    }
+    Ok(frames)
 }
 
 /// One global colour table shared by every frame, with index 0 kept for
@@ -259,6 +351,23 @@ mod tests {
         b.set(2, 2, Rgba::rgb(0, 228, 54));
         let frames = vec![(a, 15), (b, 105)];
         assert_eq!(decode_apng(&encode_apng(&frames).unwrap()).unwrap(), frames);
+    }
+
+    #[test]
+    fn animated_webp_keeps_every_frame_alpha_and_millisecond_delay() {
+        let mut a = Pixels::new(3, 2);
+        a.set(0, 0, Rgba::rgba(255, 0, 77, 100));
+        let mut b = Pixels::new(3, 2);
+        b.set(2, 1, Rgba::rgb(0, 228, 54));
+        let frames = vec![(a, 15), (b, 1234)];
+        assert_eq!(decode_animated_webp(&encode_animated_webp(&frames).unwrap()).unwrap(), frames);
+    }
+
+    #[test]
+    fn odd_sized_frames_keep_the_chunks_aligned() {
+        let frames: Vec<(Pixels, u32)> =
+            (0..3u8).map(|i| (Pixels::filled(5, 3, Rgba::rgb(i * 80, 7, 9)), 100)).collect();
+        assert_eq!(decode_animated_webp(&encode_animated_webp(&frames).unwrap()).unwrap(), frames);
     }
 
     #[test]

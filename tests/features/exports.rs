@@ -100,3 +100,17 @@ fn a_frame_exports_as_lossless_webp() {
     let image = io::decode_image(&std::fs::read(&path).unwrap()).unwrap();
     assert_eq!(image, scenario.sprite().composite(1).scaled_up(2));
 }
+
+#[test]
+fn an_animated_webp_keeps_every_frame_and_its_exact_delay() {
+    let mut scenario = three_frame_animation();
+    scenario.when(Command::SetFrameDuration { duration_ms: 15, all_frames: true });
+    let path = scenario.path("walk.webp");
+    io::export_animated_webp(&path, scenario.sprite(), None, 2).unwrap();
+    let frames = io::decode_animated_webp(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(frames.len(), 3);
+    for (index, (image, delay)) in frames.iter().enumerate() {
+        assert_eq!(image, &scenario.sprite().composite(index).scaled_up(2));
+        assert_eq!(*delay, 15);
+    }
+}

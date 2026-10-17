@@ -1269,6 +1269,11 @@ impl App {
             if ui.button("WebP (frame)…").clicked() {
                 actions.push(Action::ExportWebp);
             }
+            let webp =
+                ui.button("Animated WebP…").on_hover_text("Lossless, full alpha, exact delays; uses the preview's tag");
+            if webp.clicked() {
+                actions.push(Action::ExportAnimatedWebp);
+            }
             if ui.button("PNG sequence…").clicked() {
                 actions.push(Action::ExportSequence);
             }
@@ -1573,6 +1578,7 @@ fn palette_entries(primary: Rgba) -> Vec<(String, Action)> {
         ("Export GIF".into(), Action::ExportGif),
         ("Export animated PNG (APNG)".into(), Action::ExportApng),
         ("Export WebP".into(), Action::ExportWebp),
+        ("Export animated WebP".into(), Action::ExportAnimatedWebp),
         ("Export sprite sheet".into(), Action::ExportSheet),
         ("Export PNG sequence".into(), Action::ExportSequence),
         ("Import sprite sheet".into(), Action::ImportSheet),
@@ -1742,6 +1748,7 @@ mod tests {
             Action::ExportGif,
             Action::ExportApng,
             Action::ExportWebp,
+            Action::ExportAnimatedWebp,
             Action::ExportSheet,
             Action::ExportSequence,
             Action::ImportSheet,
@@ -1774,6 +1781,7 @@ mod tests {
                 | Action::ExportGif
                 | Action::ExportApng
                 | Action::ExportWebp
+                | Action::ExportAnimatedWebp
                 | Action::ExportSheet
                 | Action::ExportSequence
                 | Action::ImportSheet
