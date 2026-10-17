@@ -42,17 +42,26 @@ impl Studio {
 
     /// Saves to the current path, or to `path` (which becomes the current
     /// one). Every save records a version, unless nothing changed since the
-    /// last one.
+    /// last one, and a save that fails records none.
+    ///
+    /// The file always ends in `.spry`. A document is never written over a
+    /// file of some other kind, which matters when an AI picks the path.
     pub fn save(&mut self, path: Option<&Path>) -> Result<PathBuf> {
         let target = path
             .map(Path::to_path_buf)
             .or_else(|| self.path.clone())
-            .context("this document hasn't been saved yet, so give it a file name")?;
-        let target = if target.extension().is_none() { target.with_extension("spry") } else { target };
-        self.editor.anchor_floating();
+            .context("this document hasn't been saved yet, so give it a file name")?
+            .with_extension("spry");
+        if self.editor.floating.is_some() {
+            self.editor.execute(Command::Anchor).map_err(anyhow::Error::msg)?;
+        }
+        let versions_before = self.editor.document.versions.len();
         let stamp = format!("Saved {}", target.file_name().and_then(|n| n.to_str()).unwrap_or("document"));
         self.editor.execute(Command::CommitVersion { message: stamp }).map_err(anyhow::Error::msg)?;
-        io::save(&target, &self.editor.document)?;
+        if let Err(error) = io::save(&target, &self.editor.document) {
+            self.editor.document.versions.truncate(versions_before);
+            return Err(error);
+        }
         self.path = Some(target.clone());
         self.editor.mark_saved();
         Ok(target)
@@ -86,6 +95,40 @@ mod tests {
         studio.save(Some(&folder.path().join("a.spry"))).unwrap();
         studio.save(None).unwrap();
         assert_eq!(studio.editor.document.versions.len(), 1);
+    }
+
+    #[test]
+    fn a_failed_save_records_no_version() {
+        let folder = tempfile::tempdir().unwrap();
+        let mut studio = Studio::new(4, 4);
+        let impossible = folder.path().join("no such folder").join("a.spry");
+        assert!(studio.save(Some(&impossible)).is_err());
+        assert!(studio.editor.document.versions.is_empty());
+        assert!(studio.path.is_none());
+    }
+
+    #[test]
+    fn documents_are_only_ever_written_as_spry_files() {
+        let folder = tempfile::tempdir().unwrap();
+        std::fs::write(folder.path().join(".bashrc"), "keep me").unwrap();
+        let saved = Studio::new(4, 4).save(Some(&folder.path().join(".bashrc"))).unwrap();
+        assert_eq!(saved.file_name().unwrap(), ".bashrc.spry");
+        assert_eq!(std::fs::read_to_string(folder.path().join(".bashrc")).unwrap(), "keep me");
+    }
+
+    #[test]
+    fn saving_anchors_floating_pixels_as_an_undoable_step() {
+        use crate::editor::{PixelValue, Rect};
+        let folder = tempfile::tempdir().unwrap();
+        let mut studio = Studio::new(4, 4);
+        let editor = &mut studio.editor;
+        editor.execute(Command::SetPixels { pixels: vec![PixelValue { x: 0, y: 0, colour: Rgba::BLACK }] }).unwrap();
+        editor.execute(Command::SelectRect { rect: Rect::new(0, 0, 1, 1), add: false }).unwrap();
+        editor.execute(Command::MoveFloating { dx: 2, dy: 2 }).unwrap();
+        studio.save(Some(&folder.path().join("a"))).unwrap();
+        assert!(studio.editor.floating.is_none());
+        studio.editor.execute(Command::Undo).unwrap();
+        assert!(studio.editor.floating.is_some());
     }
 
     #[test]

@@ -370,6 +370,10 @@ impl Sprite {
             pin.x += offset_x;
             pin.y += offset_y;
         }
+        for slice in &mut self.slices {
+            slice.bounds.x += offset_x;
+            slice.bounds.y += offset_y;
+        }
         self.width = width;
         self.height = height;
     }
@@ -485,6 +489,14 @@ mod tests {
         sprite.merge_down(1);
         assert_eq!(sprite.layers.len(), 1);
         assert!(sprite.cel_image(0, 0).is_none_or(|image| image.get(1, 0).is_transparent()));
+    }
+
+    #[test]
+    fn resizing_the_canvas_carries_slices_with_the_art() {
+        let mut sprite = Sprite::new(4, 4);
+        sprite.slices.push(Slice { name: "hand".into(), bounds: Rect::new(1, 1, 2, 2) });
+        sprite.resize_canvas(8, 8, 2, 3);
+        assert_eq!(sprite.slices[0].bounds, Rect::new(3, 4, 2, 2));
     }
 
     #[test]
