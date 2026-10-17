@@ -101,13 +101,14 @@ pub fn changed_pixels(before: &Pixels, after: &Pixels) -> Vec<Point> {
 mod tests {
     use super::*;
     use crate::editor::color::Rgba;
+    use crate::editor::{FrameIndex, LayerIndex};
 
     #[test]
     fn identical_content_does_not_make_a_new_version() {
         let mut document = Document::new(Sprite::new(4, 4));
         assert_eq!(document.commit_version("base", 1), Some(1));
         assert_eq!(document.commit_version("again", 2), None);
-        document.sprite.cel_image_mut(0, 0).set(0, 0, Rgba::BLACK);
+        document.sprite.cel_image_mut(LayerIndex(0), FrameIndex(0)).set(0, 0, Rgba::BLACK);
         assert_eq!(document.commit_version("ink", 3), Some(2));
     }
 

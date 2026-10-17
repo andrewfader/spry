@@ -186,6 +186,7 @@ impl Sprite {
 mod tests {
     use super::*;
     use crate::editor::{BlendMode, Rgba};
+    use crate::editor::{FrameIndex, LayerIndex};
 
     const RED: Rgba = Rgba::rgb(255, 0, 0);
 
@@ -233,7 +234,7 @@ mod tests {
     #[test]
     fn hiding_a_group_hides_everything_in_it() {
         let mut sprite = head_and_body();
-        sprite.cel_image_mut(1, 0).set(0, 0, RED);
+        sprite.cel_image_mut(LayerIndex(1), FrameIndex(0)).set(0, 0, RED);
         assert_eq!(sprite.composite(0).get(0, 0), RED);
         sprite.layers[3].visible = false;
         assert!(sprite.composite(0).get(0, 0).is_transparent());
@@ -243,9 +244,9 @@ mod tests {
     #[test]
     fn a_group_blends_its_children_as_one_picture() {
         let mut sprite = head_and_body();
-        sprite.cel_image_mut(0, 0).set(0, 0, Rgba::rgb(200, 200, 200));
-        sprite.cel_image_mut(1, 0).set(0, 0, Rgba::rgb(255, 0, 0));
-        sprite.cel_image_mut(2, 0).set(0, 0, Rgba::rgb(0, 0, 255));
+        sprite.cel_image_mut(LayerIndex(0), FrameIndex(0)).set(0, 0, Rgba::rgb(200, 200, 200));
+        sprite.cel_image_mut(LayerIndex(1), FrameIndex(0)).set(0, 0, Rgba::rgb(255, 0, 0));
+        sprite.cel_image_mut(LayerIndex(2), FrameIndex(0)).set(0, 0, Rgba::rgb(0, 0, 255));
         sprite.layers[3].blend = BlendMode::Multiply;
         // Inside the group Hair covers Face; the group's result (blue)
         // multiplies onto the body.
@@ -262,13 +263,17 @@ mod tests {
     #[test]
     fn duplicating_a_group_copies_the_whole_tree_with_its_own_pixels() {
         let mut sprite = head_and_body();
-        sprite.cel_image_mut(1, 0).set(0, 0, RED);
+        sprite.cel_image_mut(LayerIndex(1), FrameIndex(0)).set(0, 0, RED);
         let copy = sprite.duplicate_group(3);
         assert_eq!(names(&sprite), vec!["Body", "Face", "Hair", "Head", "Face copy", "Hair copy", "Head copy"]);
         assert_eq!(copy, 6);
         assert_eq!(sprite.layers[4].parent, Some(sprite.layers[6].id));
-        sprite.cel_image_mut(4, 0).set(0, 0, Rgba::BLACK);
-        assert_eq!(sprite.cel_image(1, 0).unwrap().get(0, 0), RED, "the original keeps its pixels");
+        sprite.cel_image_mut(LayerIndex(4), FrameIndex(0)).set(0, 0, Rgba::BLACK);
+        assert_eq!(
+            sprite.cel_image(LayerIndex(1), FrameIndex(0)).unwrap().get(0, 0),
+            RED,
+            "the original keeps its pixels"
+        );
         assert_eq!(sprite.validate(), Ok(()));
     }
 

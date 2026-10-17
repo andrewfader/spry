@@ -68,7 +68,7 @@ fn restoring_a_missing_version_is_refused() {
 fn branching_a_version_opens_it_as_a_new_document_with_its_history() {
     let scenario = with_two_versions();
     let branch = scenario.studio.editor.document.branch(1).expect("version 1 exists");
-    assert_eq!(branch.sprite.cel_image(0, 0).unwrap().get(4, 4), BLUE);
+    assert_eq!(branch.sprite.cel_image(LayerIndex(0), FrameIndex(0)).unwrap().get(4, 4), BLUE);
     let messages: Vec<&str> = branch.versions.iter().map(|v| v.message.as_str()).collect();
     assert_eq!(messages, vec!["base"], "the branch forgets what came after it");
     assert!(scenario.studio.editor.document.branch(99).is_none());

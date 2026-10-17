@@ -46,15 +46,15 @@ impl Editor {
 
     pub(super) fn link_cel(&mut self, to_frame: usize) -> EditResult {
         let to_frame = self.check_frame_index(to_frame)?;
-        if self.sprite().cel_image(self.layer, self.frame).is_none() {
+        if self.sprite().cel_image(LayerIndex(self.layer), FrameIndex(self.frame)).is_none() {
             return Err(EditError::Invalid("an empty cel has nothing to link".into()));
         }
-        self.document.sprite.link_cel(self.layer, self.frame, to_frame);
+        self.document.sprite.link_cel(LayerIndex(self.layer), FrameIndex(self.frame), FrameIndex(to_frame));
         Ok(format!("linked frame {} to frame {}", to_frame + 1, self.frame + 1))
     }
 
     pub(super) fn unlink_cel(&mut self) -> EditResult {
-        if !self.document.sprite.unlink_cel(self.layer, self.frame) {
+        if !self.document.sprite.unlink_cel(LayerIndex(self.layer), FrameIndex(self.frame)) {
             return Err(EditError::Invalid("this cel isn't linked".into()));
         }
         Ok("unlinked the cel".into())
@@ -62,7 +62,7 @@ impl Editor {
 
     pub(super) fn clear_cel(&mut self) -> EditResult {
         self.ensure_drawable()?;
-        self.document.sprite.clear_cel(self.layer, self.frame);
+        self.document.sprite.clear_cel(LayerIndex(self.layer), FrameIndex(self.frame));
         Ok("cleared the cel".into())
     }
 

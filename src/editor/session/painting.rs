@@ -90,7 +90,7 @@ impl Editor {
         let before = self.current_image_or_blank();
         let mut image = before.clone();
         self.paint_points(&mut image, &before, &points, ink);
-        *self.document.sprite.cel_image_mut(self.layer, self.frame) = image;
+        *self.document.sprite.cel_image_mut(LayerIndex(self.layer), FrameIndex(self.frame)) = image;
         Ok(summary.to_string())
     }
 
@@ -125,7 +125,7 @@ impl Editor {
 
     pub(super) fn set_pixels(&mut self, pixels: &[PixelValue]) -> EditResult {
         self.ensure_drawable()?;
-        let image = self.document.sprite.cel_image_mut(self.layer, self.frame);
+        let image = self.document.sprite.cel_image_mut(LayerIndex(self.layer), FrameIndex(self.frame));
         let mut written = 0;
         for pixel in pixels {
             if image.contains(pixel.x, pixel.y) {
@@ -147,7 +147,7 @@ impl Editor {
         let count = region.len();
         let mut painted = image.clone();
         self.paint_points(&mut painted, &image, &region, ink);
-        *self.document.sprite.cel_image_mut(self.layer, self.frame) = painted;
+        *self.document.sprite.cel_image_mut(LayerIndex(self.layer), FrameIndex(self.frame)) = painted;
         Ok(format!("filled {count} pixels"))
     }
 
@@ -165,7 +165,7 @@ impl Editor {
             let t = (((x - from.0) as f32 * gx) + ((y - from.1) as f32 * gy)) / length_squared;
             painted.set(x, y, if gradient_is_primary(x, y, t) { primary } else { secondary });
         }
-        *self.document.sprite.cel_image_mut(self.layer, self.frame) = painted;
+        *self.document.sprite.cel_image_mut(LayerIndex(self.layer), FrameIndex(self.frame)) = painted;
         Ok(format!("gradient-filled {} pixels", region.len()))
     }
 
@@ -185,7 +185,7 @@ impl Editor {
             }
             None => after,
         };
-        *self.document.sprite.cel_image_mut(self.layer, self.frame) = merged;
+        *self.document.sprite.cel_image_mut(LayerIndex(self.layer), FrameIndex(self.frame)) = merged;
         Ok(())
     }
 
@@ -194,7 +194,7 @@ impl Editor {
         let fitted = if (image.width(), image.height()) == (w, h) { image } else { image.resized_canvas(w, h, 0, 0) };
         let id = self.document.sprite.insert_layer(self.layer + 1, name);
         self.layer = self.sprite().layer_index(id).unwrap_or(self.layer);
-        *self.document.sprite.cel_image_mut(self.layer, self.frame) = fitted;
+        *self.document.sprite.cel_image_mut(LayerIndex(self.layer), FrameIndex(self.frame)) = fitted;
         Ok(format!("added layer \"{name}\""))
     }
 }

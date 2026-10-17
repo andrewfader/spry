@@ -9,6 +9,7 @@
 
 use serde_json::Value;
 use spry::editor::{Command, EditResult, Pixels, Rgba, Sprite};
+pub use spry::editor::{FrameIndex, LayerIndex};
 use spry::studio::Studio;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -66,7 +67,7 @@ impl Scenario {
     }
 
     pub fn cel_pixel(&self, layer: usize, frame: usize, x: i32, y: i32) -> Rgba {
-        self.sprite().cel_image(layer, frame).map_or(CLEAR, |image| image.get(x, y))
+        self.sprite().cel_image(LayerIndex(layer), FrameIndex(frame)).map_or(CLEAR, |image| image.get(x, y))
     }
 
     pub fn composite_pixel(&self, frame: usize, x: i32, y: i32) -> Rgba {
@@ -81,7 +82,9 @@ impl Scenario {
 
     /// Every painted pixel on the current cel.
     pub fn painted_pixels(&self) -> Vec<(i32, i32)> {
-        let Some(image) = self.sprite().cel_image(self.studio.editor.layer, self.studio.editor.frame) else {
+        let Some(image) =
+            self.sprite().cel_image(LayerIndex(self.studio.editor.layer), FrameIndex(self.studio.editor.frame))
+        else {
             return Vec::new();
         };
         image.bounds().points().filter(|&(x, y)| !image.get(x, y).is_transparent()).collect()

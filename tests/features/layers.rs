@@ -56,7 +56,7 @@ fn new_layers_go_above_the_current_one_and_become_current() {
     assert_eq!(scenario.studio.editor.layer, 1);
     assert_eq!(scenario.sprite().layers[1].name, "Layer 2");
     scenario.when(Command::Fill { at: (0, 0), ink: Ink::colour(RED), contiguous: true });
-    assert!(scenario.sprite().cel_image(0, 0).is_none(), "the layer below is untouched");
+    assert!(scenario.sprite().cel_image(LayerIndex(0), FrameIndex(0)).is_none(), "the layer below is untouched");
 }
 
 #[test]
@@ -152,7 +152,7 @@ fn files_from_before_cel_opacity_still_open() {
         sprite["layers"][0].as_object_mut().unwrap().remove(key);
     }
     let sprite: spry::editor::Sprite = serde_json::from_value(sprite).unwrap();
-    assert_eq!(sprite.cel(0, 0).unwrap().opacity, 255);
+    assert_eq!(sprite.cel(LayerIndex(0), FrameIndex(0)).unwrap().opacity, 255);
     assert_eq!(sprite.composite(0).get(1, 1), RED);
 }
 

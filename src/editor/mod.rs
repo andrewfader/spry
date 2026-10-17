@@ -31,4 +31,4 @@ pub use document::{Document, Version};
 pub use palette::Palette;
 pub use pixels::{Pixels, Rect};
 pub use session::{EditError, EditResult, Editor, StrokeKind};
-pub use sprite::{Cel, Frame, Layer, LayerKind, LoopDirection, Sprite, Tag};
+pub use sprite::{Cel, Frame, FrameIndex, Layer, LayerIndex, LayerKind, LoopDirection, Sprite, Tag};

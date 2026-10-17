@@ -24,7 +24,7 @@ use super::limits;
 use super::pixels::{Pixels, Rect};
 use super::raster::{self, Point};
 use super::selection::{Floating, Selection};
-use super::sprite::{Sprite, Tag};
+use super::sprite::{FrameIndex, LayerIndex, Sprite, Tag};
 use painting::{ellipse_path, rectangle_path};
 use std::fmt;
 
@@ -371,7 +371,7 @@ impl Editor {
         let points = self.footprint(&path, brush);
         let mut image = before.clone();
         self.paint_points(&mut image, &before, &points, ink);
-        *self.document.sprite.cel_image_mut(self.layer, self.frame) = image;
+        *self.document.sprite.cel_image_mut(LayerIndex(self.layer), FrameIndex(self.frame)) = image;
         self.revision += 1;
     }
 
@@ -383,9 +383,12 @@ impl Editor {
     /// step behind.
     pub fn finish_stroke(&mut self) {
         let Some(stroke) = self.stroke.take() else { return };
-        let unchanged = self.sprite().cel_image(self.layer, self.frame) == Some(&stroke.before)
+        let unchanged = self.sprite().cel_image(LayerIndex(self.layer), FrameIndex(self.frame)) == Some(&stroke.before)
             || (stroke.before.is_blank()
-                && self.sprite().cel_image(self.layer, self.frame).is_none_or(Pixels::is_blank));
+                && self
+                    .sprite()
+                    .cel_image(LayerIndex(self.layer), FrameIndex(self.frame))
+                    .is_none_or(Pixels::is_blank));
         if unchanged {
             self.redo_stack = stroke.redo_before;
             if stroke.pushed_undo {
@@ -542,7 +545,7 @@ impl Editor {
 
     fn current_image_or_blank(&self) -> Pixels {
         self.sprite()
-            .cel_image(self.layer, self.frame)
+            .cel_image(LayerIndex(self.layer), FrameIndex(self.frame))
             .cloned()
             .unwrap_or_else(|| Pixels::new(self.sprite().width, self.sprite().height))
     }
@@ -556,7 +559,7 @@ impl Editor {
         match self.floating.as_ref().filter(|_| frame == self.frame) {
             Some(floating) => {
                 let mut with_floating = sprite
-                    .cel_image(self.layer, frame)
+                    .cel_image(LayerIndex(self.layer), FrameIndex(frame))
                     .cloned()
                     .unwrap_or_else(|| Pixels::new(sprite.width, sprite.height));
                 with_floating.stamp(&floating.pixels, floating.x, floating.y, 255);
@@ -584,7 +587,7 @@ mod tests {
         let rect = Command::DrawRect { from: (1, 1), to: (6, 6), ink, filled: true, brush: Brush::default() };
         let mut previewed = editor.preview(&rect);
         editor.execute(rect).unwrap();
-        let image = editor.sprite().cel_image(0, 0).unwrap();
+        let image = editor.sprite().cel_image(LayerIndex(0), FrameIndex(0)).unwrap();
         let mut painted: Vec<(Point, Rgba)> = image
             .bounds()
             .points()
@@ -604,7 +607,10 @@ mod tests {
     }
 
     fn pixel(editor: &Editor, x: i32, y: i32) -> Rgba {
-        editor.sprite().cel_image(editor.layer, editor.frame).map_or(Rgba::TRANSPARENT, |i| i.get(x, y))
+        editor
+            .sprite()
+            .cel_image(LayerIndex(editor.layer), FrameIndex(editor.frame))
+            .map_or(Rgba::TRANSPARENT, |i| i.get(x, y))
     }
 
     #[test]
@@ -710,8 +716,11 @@ mod tests {
         editor.execute(Command::SelectRect { rect: Rect::new(0, 0, 1, 1), add: false }).unwrap();
         editor.execute(Command::MoveFloating { dx: 2, dy: 0 }).unwrap();
         editor.execute(Command::SelectLayer { index: 1 }).unwrap();
-        assert_eq!(editor.sprite().cel_image(0, 0).unwrap().get(2, 0), RED);
-        assert!(editor.sprite().cel_image(1, 0).is_none_or(|image| image.get(2, 0).is_transparent()));
+        assert_eq!(editor.sprite().cel_image(LayerIndex(0), FrameIndex(0)).unwrap().get(2, 0), RED);
+        assert!(editor
+            .sprite()
+            .cel_image(LayerIndex(1), FrameIndex(0))
+            .is_none_or(|image| image.get(2, 0).is_transparent()));
     }
 
     #[test]

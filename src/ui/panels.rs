@@ -12,6 +12,7 @@ use crate::editor::dither::CLASSIC_PATTERNS;
 use crate::editor::limits::MAX_CANVAS_SIDE;
 use crate::editor::playback;
 use crate::editor::{BlendMode, Command, LoopDirection, Palette, Pattern, Rgba};
+use crate::editor::{FrameIndex, LayerIndex};
 use crate::io::{SheetLayout, SheetOptions};
 use crate::studio::Studio;
 use egui::{Align2, Color32, RichText, Sense, Vec2};
@@ -495,7 +496,7 @@ impl App {
         let sprite = editor.sprite();
         let rows: Vec<LayerRow> = (0..sprite.layers.len()).map(|index| LayerRow::of(sprite, index)).collect();
         let current = editor.layer;
-        let cel_opacity = sprite.cel(current, editor.frame).map(|cel| cel.opacity);
+        let cel_opacity = sprite.cel(LayerIndex(current), FrameIndex(editor.frame)).map(|cel| cel.opacity);
         let mut commands: Vec<Command> = Vec::new();
         ui.horizontal(|ui| {
             if ui.button("➕").on_hover_text("New layer").clicked() {
@@ -743,7 +744,7 @@ impl App {
             if ui.button("🔗 Clone").on_hover_text("Duplicate as linked cels: painting one paints both").clicked() {
                 commands.push(Command::DuplicateFrame { as_clone: true });
             }
-            if editor.sprite().is_linked(layer, current) && ui.button("✂ Unlink").clicked() {
+            if editor.sprite().is_linked(LayerIndex(layer), FrameIndex(current)) && ui.button("✂ Unlink").clicked() {
                 commands.push(Command::UnlinkCel);
             }
             if ui.button("◀").on_hover_text("Move frame earlier").clicked() && current > 0 {
@@ -794,7 +795,7 @@ impl App {
                             .filter(|t| (t.from..=t.to).contains(&frame))
                             .map(|t| t.name.as_str())
                             .collect();
-                        let link = if sprite.is_linked(layer, frame) { "🔗" } else { "" };
+                        let link = if sprite.is_linked(LayerIndex(layer), FrameIndex(frame)) { "🔗" } else { "" };
                         ui.small(format!("{}{link}", frame + 1));
                         if !tags.is_empty() {
                             ui.small(
@@ -1689,8 +1690,9 @@ fn cel_grid(
             let name: String = sprite.layers[layer].name.chars().take(10).collect();
             ui.label(RichText::new(name).small().strong());
             for frame in 0..sprite.frame_count() {
-                let has_art = sprite.cel_image(layer, frame).is_some_and(|image| !image.is_blank());
-                let symbol = match (has_art, sprite.is_linked(layer, frame)) {
+                let has_art =
+                    sprite.cel_image(LayerIndex(layer), FrameIndex(frame)).is_some_and(|image| !image.is_blank());
+                let symbol = match (has_art, sprite.is_linked(LayerIndex(layer), FrameIndex(frame))) {
                     (true, true) => "◆",
                     (true, false) => "■",
                     (false, _) => "·",

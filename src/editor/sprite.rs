@@ -31,6 +31,16 @@ pub struct ImageId(pub u32);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct LayerId(pub u32);
 
+/// A position in the layer stack, 0 at the bottom. Cels are found by a
+/// layer and a frame, two plain numbers that are easy to swap, so each has
+/// its own type. Neither converts from `usize` by itself.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct LayerIndex(pub usize);
+
+/// A position in the timeline, 0 first.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct FrameIndex(pub usize);
+
 /// Where a layer meets a frame: which pooled image it shows, and how
 /// strongly. Linked cels (clones) share an image but each keeps its own
 /// opacity, as in Aseprite.
@@ -421,11 +431,11 @@ impl Sprite {
         id
     }
 
-    pub fn cel(&self, layer: usize, frame: usize) -> Option<Cel> {
+    pub fn cel(&self, LayerIndex(layer): LayerIndex, FrameIndex(frame): FrameIndex) -> Option<Cel> {
         *self.layers.get(layer)?.cels.get(frame)?
     }
 
-    pub fn cel_image(&self, layer: usize, frame: usize) -> Option<&Pixels> {
+    pub fn cel_image(&self, layer: LayerIndex, frame: FrameIndex) -> Option<&Pixels> {
         let cel = self.cel(layer, frame)?;
         self.images.get(&cel.image).map(|image| &**image)
     }
@@ -434,7 +444,7 @@ impl Sprite {
     /// transparent image. An image shared with an undo snapshot is copied
     /// first (copy-on-write). An image shared with *linked cels* is not
     /// copied: they're meant to change together.
-    pub fn cel_image_mut(&mut self, layer: usize, frame: usize) -> &mut Pixels {
+    pub fn cel_image_mut(&mut self, LayerIndex(layer): LayerIndex, FrameIndex(frame): FrameIndex) -> &mut Pixels {
         let id = match self.layers[layer].cels[frame] {
             Some(cel) => cel.image,
             None => {
@@ -449,7 +459,7 @@ impl Sprite {
 
     /// Every (layer, frame) that shares the image at this cel, itself
     /// included.
-    pub fn linked_cels_of(&self, layer: usize, frame: usize) -> Vec<(usize, usize)> {
+    pub fn linked_cels_of(&self, layer: LayerIndex, frame: FrameIndex) -> Vec<(LayerIndex, FrameIndex)> {
         let Some(target) = self.cel(layer, frame).map(|cel| cel.image) else {
             return Vec::new();
         };
@@ -458,16 +468,16 @@ impl Sprite {
             .enumerate()
             .flat_map(|(li, l)| l.cels.iter().enumerate().map(move |(fi, cel)| (li, fi, *cel)))
             .filter(|&(_, _, cel)| cel.is_some_and(|cel| cel.image == target))
-            .map(|(li, fi, _)| (li, fi))
+            .map(|(li, fi, _)| (LayerIndex(li), FrameIndex(fi)))
             .collect()
     }
 
-    pub fn is_linked(&self, layer: usize, frame: usize) -> bool {
+    pub fn is_linked(&self, layer: LayerIndex, frame: FrameIndex) -> bool {
         self.linked_cels_of(layer, frame).len() > 1
     }
 
     /// Gives a linked cel its own private copy of the pixels.
-    pub fn unlink_cel(&mut self, layer: usize, frame: usize) -> bool {
+    pub fn unlink_cel(&mut self, layer: LayerIndex, frame: FrameIndex) -> bool {
         if !self.is_linked(layer, frame) {
             return false;
         }
@@ -475,17 +485,22 @@ impl Sprite {
             return false;
         };
         let image = self.add_image(pixels);
-        self.layers[layer].cels[frame] = Some(Cel { image, ..cel });
+        self.layers[layer.0].cels[frame.0] = Some(Cel { image, ..cel });
         true
     }
 
     /// Makes `(layer, to_frame)` a clone of `(layer, from_frame)`.
-    pub fn link_cel(&mut self, layer: usize, from_frame: usize, to_frame: usize) {
+    pub fn link_cel(
+        &mut self,
+        LayerIndex(layer): LayerIndex,
+        FrameIndex(from_frame): FrameIndex,
+        FrameIndex(to_frame): FrameIndex,
+    ) {
         self.layers[layer].cels[to_frame] = self.layers[layer].cels[from_frame];
         self.collect_unused_images();
     }
 
-    pub fn clear_cel(&mut self, layer: usize, frame: usize) {
+    pub fn clear_cel(&mut self, LayerIndex(layer): LayerIndex, FrameIndex(frame): FrameIndex) {
         self.layers[layer].cels[frame] = None;
         self.collect_unused_images();
     }
@@ -543,10 +558,10 @@ impl Sprite {
                 out.stamp_blended(&inside, 0, 0, layer.opacity, layer.blend);
                 continue;
             }
-            let cel_opacity = self.cel(index, frame).map_or(255, |cel| cel.opacity);
+            let cel_opacity = self.cel(LayerIndex(index), FrameIndex(frame)).map_or(255, |cel| cel.opacity);
             let image = match stand_in {
                 Some((stand_in_layer, image)) if stand_in_layer == index => Some(image),
-                _ => self.cel_image(index, frame),
+                _ => self.cel_image(LayerIndex(index), FrameIndex(frame)),
             };
             if let Some(image) = image {
                 out.stamp_blended(image, 0, 0, mul_opacity(layer.opacity, cel_opacity), layer.blend);
@@ -600,28 +615,31 @@ mod tests {
         assert_eq!(sprite.layers.len(), 1);
         assert_eq!(sprite.layers[0].name, "Layer 1");
         assert_eq!(sprite.frames, vec![Frame { duration_ms: 100, note: String::new() }]);
-        assert!(sprite.cel_image(0, 0).is_none());
+        assert!(sprite.cel_image(LayerIndex(0), FrameIndex(0)).is_none());
         assert_eq!(sprite.palette.name, "PICO-8");
     }
 
     #[test]
     fn painting_an_empty_cel_creates_its_image() {
         let mut sprite = Sprite::new(4, 4);
-        sprite.cel_image_mut(0, 0).set(1, 1, RED);
-        assert_eq!(sprite.cel_image(0, 0).unwrap().get(1, 1), RED);
+        sprite.cel_image_mut(LayerIndex(0), FrameIndex(0)).set(1, 1, RED);
+        assert_eq!(sprite.cel_image(LayerIndex(0), FrameIndex(0)).unwrap().get(1, 1), RED);
     }
 
     #[test]
     fn merging_down_onto_clones_gives_each_frame_its_own_art() {
         let mut sprite = Sprite::new(4, 4);
-        sprite.cel_image_mut(0, 0).set(0, 0, RED);
+        sprite.cel_image_mut(LayerIndex(0), FrameIndex(0)).set(0, 0, RED);
         sprite.insert_frame(1, 100);
-        sprite.link_cel(0, 0, 1);
+        sprite.link_cel(LayerIndex(0), FrameIndex(0), FrameIndex(1));
         sprite.insert_layer(1, "Top");
-        sprite.cel_image_mut(1, 0).set(1, 0, Rgba::BLACK);
-        sprite.cel_image_mut(1, 1).set(2, 0, Rgba::BLACK);
+        sprite.cel_image_mut(LayerIndex(1), FrameIndex(0)).set(1, 0, Rgba::BLACK);
+        sprite.cel_image_mut(LayerIndex(1), FrameIndex(1)).set(2, 0, Rgba::BLACK);
         assert!(sprite.merge_down(1));
-        let (first, second) = (sprite.cel_image(0, 0).unwrap(), sprite.cel_image(0, 1).unwrap());
+        let (first, second) = (
+            sprite.cel_image(LayerIndex(0), FrameIndex(0)).unwrap(),
+            sprite.cel_image(LayerIndex(0), FrameIndex(1)).unwrap(),
+        );
         assert_eq!((first.get(0, 0), first.get(1, 0), first.get(2, 0)), (RED, Rgba::BLACK, Rgba::TRANSPARENT));
         assert_eq!((second.get(0, 0), second.get(1, 0), second.get(2, 0)), (RED, Rgba::TRANSPARENT, Rgba::BLACK));
     }
@@ -629,25 +647,25 @@ mod tests {
     #[test]
     fn merging_down_keeps_clones_that_stay_identical_linked() {
         let mut sprite = Sprite::new(4, 4);
-        sprite.cel_image_mut(0, 0).set(0, 0, RED);
+        sprite.cel_image_mut(LayerIndex(0), FrameIndex(0)).set(0, 0, RED);
         sprite.insert_frame(1, 100);
-        sprite.link_cel(0, 0, 1);
+        sprite.link_cel(LayerIndex(0), FrameIndex(0), FrameIndex(1));
         sprite.insert_layer(1, "Top");
-        sprite.cel_image_mut(1, 0).set(1, 0, Rgba::BLACK);
-        sprite.link_cel(1, 0, 1);
+        sprite.cel_image_mut(LayerIndex(1), FrameIndex(0)).set(1, 0, Rgba::BLACK);
+        sprite.link_cel(LayerIndex(1), FrameIndex(0), FrameIndex(1));
         sprite.merge_down(1);
-        assert!(sprite.is_linked(0, 0));
+        assert!(sprite.is_linked(LayerIndex(0), FrameIndex(0)));
     }
 
     #[test]
     fn merging_down_a_hidden_layer_drops_it_without_painting() {
         let mut sprite = Sprite::new(4, 4);
         sprite.insert_layer(1, "Hidden");
-        sprite.cel_image_mut(1, 0).set(1, 0, RED);
+        sprite.cel_image_mut(LayerIndex(1), FrameIndex(0)).set(1, 0, RED);
         sprite.layers[1].visible = false;
         sprite.merge_down(1);
         assert_eq!(sprite.layers.len(), 1);
-        assert!(sprite.cel_image(0, 0).is_none_or(|image| image.get(1, 0).is_transparent()));
+        assert!(sprite.cel_image(LayerIndex(0), FrameIndex(0)).is_none_or(|image| image.get(1, 0).is_transparent()));
     }
 
     #[test]
@@ -661,7 +679,7 @@ mod tests {
     #[test]
     fn a_fresh_sprite_is_valid() {
         let mut sprite = Sprite::new(4, 4);
-        sprite.cel_image_mut(0, 0).set(0, 0, RED);
+        sprite.cel_image_mut(LayerIndex(0), FrameIndex(0)).set(0, 0, RED);
         sprite.insert_frame(1, 100);
         assert_eq!(sprite.validate(), Ok(()));
     }
@@ -674,7 +692,7 @@ mod tests {
             |s| s.width = 0,
             |s| s.tags.push(Tag { name: "walk".into(), from: 0, to: 5, direction: LoopDirection::Forward }),
             |s| {
-                s.cel_image_mut(0, 0);
+                s.cel_image_mut(LayerIndex(0), FrameIndex(0));
                 s.width = 8;
             },
         ];
@@ -688,34 +706,37 @@ mod tests {
     #[test]
     fn snapshots_do_not_see_later_paint() {
         let mut sprite = Sprite::new(4, 4);
-        sprite.cel_image_mut(0, 0).set(0, 0, RED);
+        sprite.cel_image_mut(LayerIndex(0), FrameIndex(0)).set(0, 0, RED);
         let snapshot = sprite.clone();
-        sprite.cel_image_mut(0, 0).set(0, 0, Rgba::BLACK);
-        assert_eq!(snapshot.cel_image(0, 0).unwrap().get(0, 0), RED);
+        sprite.cel_image_mut(LayerIndex(0), FrameIndex(0)).set(0, 0, Rgba::BLACK);
+        assert_eq!(snapshot.cel_image(LayerIndex(0), FrameIndex(0)).unwrap().get(0, 0), RED);
     }
 
     #[test]
     fn cloned_frames_share_paint_until_unlinked() {
         let mut sprite = Sprite::new(4, 4);
-        sprite.cel_image_mut(0, 0).set(0, 0, RED);
+        sprite.cel_image_mut(LayerIndex(0), FrameIndex(0)).set(0, 0, RED);
         sprite.duplicate_frame(0, true);
-        sprite.cel_image_mut(0, 1).set(3, 3, RED);
-        assert_eq!(sprite.cel_image(0, 0).unwrap().get(3, 3), RED);
-        assert_eq!(sprite.linked_cels_of(0, 0), vec![(0, 0), (0, 1)]);
+        sprite.cel_image_mut(LayerIndex(0), FrameIndex(1)).set(3, 3, RED);
+        assert_eq!(sprite.cel_image(LayerIndex(0), FrameIndex(0)).unwrap().get(3, 3), RED);
+        assert_eq!(
+            sprite.linked_cels_of(LayerIndex(0), FrameIndex(0)),
+            vec![(LayerIndex(0), FrameIndex(0)), (LayerIndex(0), FrameIndex(1))]
+        );
 
-        assert!(sprite.unlink_cel(0, 1));
-        sprite.cel_image_mut(0, 1).set(2, 2, RED);
-        assert_eq!(sprite.cel_image(0, 0).unwrap().get(2, 2), Rgba::TRANSPARENT);
-        assert!(!sprite.is_linked(0, 0));
+        assert!(sprite.unlink_cel(LayerIndex(0), FrameIndex(1)));
+        sprite.cel_image_mut(LayerIndex(0), FrameIndex(1)).set(2, 2, RED);
+        assert_eq!(sprite.cel_image(LayerIndex(0), FrameIndex(0)).unwrap().get(2, 2), Rgba::TRANSPARENT);
+        assert!(!sprite.is_linked(LayerIndex(0), FrameIndex(0)));
     }
 
     #[test]
     fn duplicated_frames_without_cloning_are_independent() {
         let mut sprite = Sprite::new(4, 4);
-        sprite.cel_image_mut(0, 0).set(0, 0, RED);
+        sprite.cel_image_mut(LayerIndex(0), FrameIndex(0)).set(0, 0, RED);
         sprite.duplicate_frame(0, false);
-        sprite.cel_image_mut(0, 1).set(1, 1, RED);
-        assert_eq!(sprite.cel_image(0, 0).unwrap().get(1, 1), Rgba::TRANSPARENT);
+        sprite.cel_image_mut(LayerIndex(0), FrameIndex(1)).set(1, 1, RED);
+        assert_eq!(sprite.cel_image(LayerIndex(0), FrameIndex(0)).unwrap().get(1, 1), Rgba::TRANSPARENT);
     }
 
     #[test]
@@ -746,18 +767,18 @@ mod tests {
     fn moving_a_frame_carries_its_cels() {
         let mut sprite = Sprite::new(4, 4);
         sprite.insert_frame(1, 250);
-        sprite.cel_image_mut(0, 1).set(0, 0, RED);
+        sprite.cel_image_mut(LayerIndex(0), FrameIndex(1)).set(0, 0, RED);
         sprite.move_frame(1, 0);
         assert_eq!(sprite.frames[0].duration_ms, 250);
-        assert_eq!(sprite.cel_image(0, 0).unwrap().get(0, 0), RED);
+        assert_eq!(sprite.cel_image(LayerIndex(0), FrameIndex(0)).unwrap().get(0, 0), RED);
     }
 
     #[test]
     fn composite_respects_visibility_and_opacity() {
         let mut sprite = Sprite::new(1, 1);
-        sprite.cel_image_mut(0, 0).set(0, 0, Rgba::BLACK);
+        sprite.cel_image_mut(LayerIndex(0), FrameIndex(0)).set(0, 0, Rgba::BLACK);
         sprite.insert_layer(1, "top");
-        sprite.cel_image_mut(1, 0).set(0, 0, Rgba::WHITE);
+        sprite.cel_image_mut(LayerIndex(1), FrameIndex(0)).set(0, 0, Rgba::WHITE);
         sprite.layers[1].opacity = 128;
         let mid = sprite.composite(0).get(0, 0);
         assert!((126..=130).contains(&mid.r()), "{mid:?}");
@@ -768,23 +789,23 @@ mod tests {
     #[test]
     fn merge_down_flattens_into_the_lower_layer() {
         let mut sprite = Sprite::new(2, 1);
-        sprite.cel_image_mut(0, 0).set(0, 0, Rgba::BLACK);
+        sprite.cel_image_mut(LayerIndex(0), FrameIndex(0)).set(0, 0, Rgba::BLACK);
         sprite.insert_layer(1, "top");
-        sprite.cel_image_mut(1, 0).set(1, 0, RED);
+        sprite.cel_image_mut(LayerIndex(1), FrameIndex(0)).set(1, 0, RED);
         assert!(sprite.merge_down(1));
         assert_eq!(sprite.layers.len(), 1);
-        assert_eq!(sprite.cel_image(0, 0).unwrap().get(1, 0), RED);
+        assert_eq!(sprite.cel_image(LayerIndex(0), FrameIndex(0)).unwrap().get(1, 0), RED);
         assert!(!sprite.merge_down(0));
     }
 
     #[test]
     fn duplicated_layers_copy_pixels_independently() {
         let mut sprite = Sprite::new(2, 2);
-        sprite.cel_image_mut(0, 0).set(0, 0, RED);
+        sprite.cel_image_mut(LayerIndex(0), FrameIndex(0)).set(0, 0, RED);
         let copy = sprite.duplicate_layer(0);
         assert_eq!(sprite.layers[copy].name, "Layer 1 copy");
-        sprite.cel_image_mut(copy, 0).set(1, 1, RED);
-        assert_eq!(sprite.cel_image(0, 0).unwrap().get(1, 1), Rgba::TRANSPARENT);
+        sprite.cel_image_mut(LayerIndex(copy), FrameIndex(0)).set(1, 1, RED);
+        assert_eq!(sprite.cel_image(LayerIndex(0), FrameIndex(0)).unwrap().get(1, 1), Rgba::TRANSPARENT);
     }
 
     #[test]
@@ -798,9 +819,9 @@ mod tests {
     #[test]
     fn resizing_the_canvas_keeps_pixels_at_their_offset() {
         let mut sprite = Sprite::new(4, 4);
-        sprite.cel_image_mut(0, 0).set(1, 1, RED);
+        sprite.cel_image_mut(LayerIndex(0), FrameIndex(0)).set(1, 1, RED);
         sprite.resize_canvas(8, 2, 2, 0);
-        let image = sprite.cel_image(0, 0).unwrap();
+        let image = sprite.cel_image(LayerIndex(0), FrameIndex(0)).unwrap();
         assert_eq!((image.width(), image.height()), (8, 2));
         assert_eq!(image.get(3, 1), RED);
     }
@@ -808,9 +829,9 @@ mod tests {
     #[test]
     fn swapping_a_colour_reaches_every_frame() {
         let mut sprite = Sprite::new(2, 2);
-        sprite.cel_image_mut(0, 0).set(0, 0, RED);
+        sprite.cel_image_mut(LayerIndex(0), FrameIndex(0)).set(0, 0, RED);
         sprite.insert_frame(1, 100);
-        sprite.cel_image_mut(0, 1).set(1, 1, RED);
+        sprite.cel_image_mut(LayerIndex(0), FrameIndex(1)).set(1, 1, RED);
         assert_eq!(sprite.swap_colour(RED, Rgba::BLACK), 2);
         assert_eq!(sprite.used_colours(), vec![Rgba::BLACK]);
     }
@@ -818,8 +839,8 @@ mod tests {
     #[test]
     fn unused_images_are_collected() {
         let mut sprite = Sprite::new(2, 2);
-        sprite.cel_image_mut(0, 0).set(0, 0, RED);
-        sprite.clear_cel(0, 0);
+        sprite.cel_image_mut(LayerIndex(0), FrameIndex(0)).set(0, 0, RED);
+        sprite.clear_cel(LayerIndex(0), FrameIndex(0));
         assert!(sprite.images.is_empty());
     }
 }

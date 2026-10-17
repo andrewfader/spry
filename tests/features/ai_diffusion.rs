@@ -76,7 +76,7 @@ fn an_automatic1111_image_lands_as_a_pico8_layer_on_the_grid() {
     assert_eq!(scenario.sprite().layers.len(), 2);
     assert_eq!(scenario.sprite().layers[1].name, "slime");
     let palette = Palette::pico8().colours;
-    let layer = scenario.sprite().cel_image(1, 0).unwrap();
+    let layer = scenario.sprite().cel_image(LayerIndex(1), FrameIndex(0)).unwrap();
     assert!(
         layer.colours().iter().all(|c| c.is_transparent() || palette.contains(c)),
         "every pixel is a PICO-8 colour"

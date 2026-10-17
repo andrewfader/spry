@@ -13,7 +13,7 @@ fn a_new_document_starts_with_one_empty_layer_and_frame() {
     assert_eq!(sprite.layers[0].name, "Layer 1");
     assert_eq!(sprite.frame_count(), 1);
     assert_eq!(sprite.frames[0].duration_ms, 100);
-    assert!(sprite.cel_image(0, 0).is_none(), "the first cel is transparent");
+    assert!(sprite.cel_image(LayerIndex(0), FrameIndex(0)).is_none(), "the first cel is transparent");
     assert_eq!(sprite.palette.name, "PICO-8");
 }
 
@@ -50,7 +50,7 @@ fn a_saved_file_reopens_with_everything_identical() {
 
     let reopened = Studio::open(&path).unwrap();
     assert_eq!(reopened.editor.document, scenario.studio.editor.document);
-    assert!(reopened.editor.sprite().is_linked(1, 0), "clones stay linked after a round trip");
+    assert!(reopened.editor.sprite().is_linked(LayerIndex(1), FrameIndex(0)), "clones stay linked after a round trip");
 }
 
 #[test]

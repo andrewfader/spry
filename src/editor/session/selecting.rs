@@ -102,7 +102,7 @@ impl Editor {
             return Ok("deleted the floating pixels".into());
         }
         let selection = self.selection.clone().ok_or(EditError::NothingSelected)?;
-        let image = self.document.sprite.cel_image_mut(self.layer, self.frame);
+        let image = self.document.sprite.cel_image_mut(LayerIndex(self.layer), FrameIndex(self.frame));
         for (x, y) in selection.points() {
             image.set(x, y, Rgba::TRANSPARENT);
         }
@@ -131,7 +131,7 @@ impl Editor {
         let selection = self.selection.clone().ok_or(EditError::NothingSelected)?;
         let image = self.current_image_or_blank();
         let (pixels, bounds) = selection.extract(&image).ok_or(EditError::NothingSelected)?;
-        let cel = self.document.sprite.cel_image_mut(self.layer, self.frame);
+        let cel = self.document.sprite.cel_image_mut(LayerIndex(self.layer), FrameIndex(self.frame));
         for (x, y) in selection.points() {
             cel.set(x, y, Rgba::TRANSPARENT);
         }
@@ -146,7 +146,7 @@ impl Editor {
     pub fn anchor_floating(&mut self) -> bool {
         let Some(floating) = self.floating.take() else { return false };
         let opacity = 255;
-        self.document.sprite.cel_image_mut(self.layer, self.frame).stamp(
+        self.document.sprite.cel_image_mut(LayerIndex(self.layer), FrameIndex(self.frame)).stamp(
             &floating.pixels,
             floating.x,
             floating.y,
@@ -195,7 +195,7 @@ impl Editor {
         let turned = turn(&image);
         let offset_x = (image.width() as i32 - turned.width() as i32) / 2;
         let offset_y = (image.height() as i32 - turned.height() as i32) / 2;
-        *self.document.sprite.cel_image_mut(self.layer, self.frame) =
+        *self.document.sprite.cel_image_mut(LayerIndex(self.layer), FrameIndex(self.frame)) =
             turned.resized_canvas(image.width(), image.height(), offset_x, offset_y);
         Ok(summary.to_string())
     }

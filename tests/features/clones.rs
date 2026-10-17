@@ -34,7 +34,7 @@ fn any_cel_can_be_linked_to_another_frame() {
         .and(Command::SelectFrame { index: 0 })
         .and(paint(1, 1, GREEN));
     scenario.when(Command::LinkCel { to_frame: 2 });
-    assert!(scenario.sprite().is_linked(0, 2));
+    assert!(scenario.sprite().is_linked(LayerIndex(0), FrameIndex(2)));
     assert_eq!(scenario.cel_pixel(0, 2, 1, 1), GREEN);
     assert_eq!(scenario.cel_pixel(0, 1, 1, 1), CLEAR);
 }
@@ -47,7 +47,7 @@ fn undo_restores_a_link_that_was_broken() {
         .and(Command::DuplicateFrame { as_clone: true })
         .and(Command::UnlinkCel)
         .and(Command::Undo);
-    assert!(scenario.sprite().is_linked(0, 1));
+    assert!(scenario.sprite().is_linked(LayerIndex(0), FrameIndex(1)));
 }
 
 #[test]

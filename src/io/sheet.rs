@@ -350,6 +350,7 @@ fn even_spacing(ink: Vec<bool>, length: u32) -> Option<u32> {
 mod tests {
     use super::*;
     use crate::editor::Rgba;
+    use crate::editor::{FrameIndex, LayerIndex};
 
     const RED: Rgba = Rgba::rgb(255, 0, 0);
 
@@ -359,7 +360,7 @@ mod tests {
             sprite.insert_frame(frame, 100);
         }
         for frame in 0..4 {
-            sprite.cel_image_mut(0, frame).set(frame as i32, 0, RED);
+            sprite.cel_image_mut(LayerIndex(0), FrameIndex(frame)).set(frame as i32, 0, RED);
         }
         sprite
     }
@@ -399,7 +400,7 @@ mod tests {
     fn packing_never_overlaps_frames() {
         let options = SheetOptions { trim: true, layout: SheetLayout::Packed, padding: 1, ..Default::default() };
         let mut sprite = four_frame_sprite();
-        sprite.cel_image_mut(0, 1).set(7, 7, RED);
+        sprite.cel_image_mut(LayerIndex(0), FrameIndex(1)).set(7, 7, RED);
         let sheet = build(&sprite, "x", &options).unwrap();
         for (i, a) in sheet.frames.iter().enumerate() {
             for b in &sheet.frames[i + 1..] {
@@ -411,8 +412,8 @@ mod tests {
     #[test]
     fn merging_duplicates_points_identical_frames_at_one_image() {
         let mut sprite = four_frame_sprite();
-        sprite.clear_cel(0, 3);
-        sprite.link_cel(0, 1, 3);
+        sprite.clear_cel(LayerIndex(0), FrameIndex(3));
+        sprite.link_cel(LayerIndex(0), FrameIndex(1), FrameIndex(3));
         let options = SheetOptions { merge_duplicates: true, ..Default::default() };
         let sheet = build(&sprite, "hero", &options).unwrap();
         assert_eq!(sheet.distinct_images(), 3);

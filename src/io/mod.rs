@@ -7,6 +7,7 @@ pub mod sheet;
 pub mod spry_file;
 
 use crate::editor::{limits, Document, Palette, Pixels, Sprite};
+use crate::editor::{FrameIndex, LayerIndex};
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
@@ -46,7 +47,7 @@ fn extension_of(path: &Path) -> String {
 pub fn document_from_image(image: Pixels) -> Result<Document> {
     limits::check_canvas_size(image.width(), image.height()).map_err(anyhow::Error::msg)?;
     let mut sprite = Sprite::new(image.width(), image.height());
-    *sprite.cel_image_mut(0, 0) = image;
+    *sprite.cel_image_mut(LayerIndex(0), FrameIndex(0)) = image;
     Ok(Document::new(sprite))
 }
 
@@ -59,7 +60,7 @@ pub fn document_from_animation(frames: Vec<(Pixels, u32)>) -> Result<Document> {
             sprite.insert_frame(index, delay.max(10));
         }
         sprite.frames[index].duration_ms = delay.max(10);
-        *sprite.cel_image_mut(0, index) = image;
+        *sprite.cel_image_mut(LayerIndex(0), FrameIndex(index)) = image;
     }
     Ok(Document::new(sprite))
 }

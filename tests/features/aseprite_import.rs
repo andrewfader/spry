@@ -231,11 +231,11 @@ fn an_aseprite_file_opens_with_its_layers_cels_clones_and_tags() {
     assert_eq!(names, vec!["Body", "Eyes"]);
     assert!(!sprite.layers[1].visible, "Eyes was hidden in Aseprite");
     assert_eq!(sprite.layers[1].opacity, 128);
-    let body = sprite.cel_image(0, 0).unwrap();
+    let body = sprite.cel_image(LayerIndex(0), FrameIndex(0)).unwrap();
     assert_eq!((body.get(2, 3), body.get(3, 4)), (RED, RED), "the cel sits at its offset");
     assert_eq!(body.get(1, 3), CLEAR);
-    assert!(sprite.is_linked(0, 1), "the linked cel stays a clone");
-    assert_eq!(sprite.cel_image(1, 0).unwrap().get(0, 0), BLUE);
+    assert!(sprite.is_linked(LayerIndex(0), FrameIndex(1)), "the linked cel stays a clone");
+    assert_eq!(sprite.cel_image(LayerIndex(1), FrameIndex(0)).unwrap().get(0, 0), BLUE);
     let durations: Vec<u32> = sprite.frames.iter().map(|f| f.duration_ms).collect();
     assert_eq!(durations, vec![100, 150]);
     assert_eq!((sprite.tags[0].name.as_str(), sprite.tags[0].direction), ("walk", LoopDirection::PingPong));
@@ -256,7 +256,7 @@ fn indexed_colour_files_use_their_palette_and_transparent_index() {
         ],
     );
     let studio = Studio::open(&file.save_in(&scenario, "tiny.ase")).unwrap();
-    let image = studio.editor.sprite().cel_image(0, 0).unwrap();
+    let image = studio.editor.sprite().cel_image(LayerIndex(0), FrameIndex(0)).unwrap();
     assert_eq!([image.get(0, 0), image.get(1, 0), image.get(0, 1)], [CLEAR, RED, BLUE]);
     assert!(studio.editor.sprite().palette.colours.contains(&RED));
 }
@@ -269,10 +269,14 @@ fn cel_opacity_comes_across_as_the_cels_own() {
         .frame(100, vec![linked_cel(0, 0)]);
     let studio = Studio::open(&file.save_in(&scenario, "glow.aseprite")).unwrap();
     let sprite = studio.editor.sprite();
-    assert_eq!(sprite.cel(0, 0).unwrap().opacity, 128);
-    assert_eq!(sprite.cel_image(0, 0).unwrap().get(0, 0), RED, "the pixels themselves stay solid");
+    assert_eq!(sprite.cel(LayerIndex(0), FrameIndex(0)).unwrap().opacity, 128);
+    assert_eq!(
+        sprite.cel_image(LayerIndex(0), FrameIndex(0)).unwrap().get(0, 0),
+        RED,
+        "the pixels themselves stay solid"
+    );
     assert_eq!(sprite.composite(0).get(0, 0).a(), 128, "but the cel shows at half strength");
-    assert_eq!(sprite.cel(0, 1).unwrap().opacity, 255, "a linked cel keeps its own opacity");
+    assert_eq!(sprite.cel(LayerIndex(0), FrameIndex(1)).unwrap().opacity, 255, "a linked cel keeps its own opacity");
 }
 
 #[test]
@@ -297,7 +301,11 @@ fn groups_and_blend_modes_come_across_intact() {
     assert!(sprite.layers[3].is_group());
     assert_eq!((sprite.layers[1].parent, sprite.layers[2].parent), (Some(arm), Some(arm)));
     assert_eq!(sprite.layers[2].blend, BlendMode::Screen);
-    assert_eq!(sprite.cel_image(1, 0).unwrap().get(0, 0), BLUE, "cels find their layer through the group");
+    assert_eq!(
+        sprite.cel_image(LayerIndex(1), FrameIndex(0)).unwrap().get(0, 0),
+        BLUE,
+        "cels find their layer through the group"
+    );
     assert!(studio.notices.is_empty(), "nothing was lost: {:?}", studio.notices);
 }
 
@@ -312,7 +320,7 @@ fn tilemap_layers_are_drawn_out_tile_by_tile() {
     let file = AsepriteFile::rgba(4, 4)
         .frame(100, vec![tileset(7, 2, 2, &strip), tilemap_layer("Ground", 7), tilemap_cel(0, (2, 2), &entries)]);
     let studio = Studio::open(&file.save_in(&scenario, "ground.aseprite")).unwrap();
-    let image = studio.editor.sprite().cel_image(0, 0).unwrap();
+    let image = studio.editor.sprite().cel_image(LayerIndex(0), FrameIndex(0)).unwrap();
     assert_eq!([image.get(0, 0), image.get(1, 1), image.get(2, 0), image.get(1, 2)], [RED, RED, CLEAR, RED]);
     assert!(studio.notices.join(" ").contains("Ground"), "the change of kind is reported");
 }

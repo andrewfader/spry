@@ -9,6 +9,7 @@
 use super::Workspace;
 use crate::editor::BlendMode;
 use crate::editor::{Brush, Command, Ink, LoopDirection, Palette, Pattern, PixelValue, Rect, Rgba};
+use crate::editor::{FrameIndex, LayerIndex};
 use crate::io::{self, SheetLayout, SheetOptions};
 use crate::studio::Studio;
 use base64::Engine;
@@ -758,7 +759,7 @@ fn pixel_grid(studio: &Studio, args: &Value) -> ToolResult {
     }
     let image = match integer(args, "layer") {
         Some(layer) => sprite
-            .cel_image(layer.max(0) as usize, frame)
+            .cel_image(LayerIndex(layer.max(0) as usize), FrameIndex(frame))
             .cloned()
             .unwrap_or_else(|| crate::editor::Pixels::new(sprite.width, sprite.height)),
         None => studio.editor.composite_for_display(frame),
@@ -849,7 +850,7 @@ mod tests {
             &json!({ "from": [0, 0], "to": [3, 3], "filled": true, "colour": "#000000", "pattern": "checker" }),
         )
         .unwrap();
-        let cel = studio.editor.sprite().cel_image(0, 0).unwrap();
+        let cel = studio.editor.sprite().cel_image(LayerIndex(0), FrameIndex(0)).unwrap();
         assert_eq!(cel.get(0, 0), Rgba::BLACK);
         assert_eq!(cel.get(1, 0), Rgba::TRANSPARENT);
     }
