@@ -1497,7 +1497,7 @@ impl App {
     // ----- command palette --------------------------------------------------
 
     fn command_palette(&mut self, ctx: &egui::Context) {
-        let entries = palette_entries(self);
+        let entries = palette_entries(self.tools.primary);
         let query = self.palette_query.to_lowercase();
         let matches: Vec<&(String, Action)> =
             entries.iter().filter(|(label, _)| fuzzy_match(&query, &label.to_lowercase())).take(14).collect();
@@ -1545,7 +1545,8 @@ impl App {
 }
 
 /// Every action the palette can run, labelled for searching.
-fn palette_entries(app: &App) -> Vec<(String, Action)> {
+/// Everything Ctrl+K can find, by name.
+fn palette_entries(primary: Rgba) -> Vec<(String, Action)> {
     let mut entries: Vec<(String, Action)> = vec![
         ("New sprite".into(), Action::New),
         ("Open file".into(), Action::Open),
@@ -1573,25 +1574,13 @@ fn palette_entries(app: &App) -> Vec<(String, Action)> {
         ("Previous frame".into(), Action::PreviousFrame),
         ("Next frame".into(), Action::NextFrame),
     ];
-    for panel in [
-        Panel::Layers,
-        Panel::Timeline,
-        Panel::Palette,
-        Panel::Preview,
-        Panel::Versions,
-        Panel::Notes,
-        Panel::Assistant,
-        Panel::Generate,
-        Panel::Export,
-        Panel::Settings,
-        Panel::ResizeCanvas,
-    ] {
+    // "New sprite" above already opens the new-sprite panel.
+    for panel in Panel::ALL.into_iter().filter(|&panel| panel != Panel::NewDocument) {
         entries.push((format!("Show / hide {}", panel.title()), Action::Toggle(panel)));
     }
     for tool in Tool::ALL {
         entries.push((format!("Tool: {}", tool.name()), Action::UseTool(tool)));
     }
-    let primary = app.tools.primary;
     let commands = [
         ("Undo", Command::Undo),
         ("Redo", Command::Redo),
@@ -1616,6 +1605,7 @@ fn palette_entries(app: &App) -> Vec<(String, Action)> {
         ("Snap layer to palette with dither", Command::SnapToPalette { dither: true }),
         ("Extract palette from sprite", Command::ExtractPalette),
         ("Add layer", Command::AddLayer { name: None }),
+        ("Add layer group", Command::AddGroup { name: None }),
         ("Duplicate layer", Command::DuplicateLayer),
         ("Merge layer down", Command::MergeDown),
         ("Delete layer", Command::RemoveLayer),
@@ -1720,6 +1710,109 @@ fn cel_grid(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One of each kind of action, so the palette test notices a new
+    /// kind. The `match` below won't compile until a new variant is listed.
+    fn every_kind_of_action() -> Vec<Action> {
+        let kinds = vec![
+            Action::New,
+            Action::Open,
+            Action::Save,
+            Action::SaveAs,
+            Action::Close,
+            Action::ExportPng,
+            Action::ExportGif,
+            Action::ExportApng,
+            Action::ExportWebp,
+            Action::ExportSheet,
+            Action::ExportSequence,
+            Action::ImportSheet,
+            Action::LoadPalette,
+            Action::SavePalette,
+            Action::Edit(Command::Undo),
+            Action::Toggle(Panel::Layers),
+            Action::UseTool(Tool::Pencil),
+            Action::SwapColours,
+            Action::PlayPause,
+            Action::ZoomIn,
+            Action::ZoomOut,
+            Action::ZoomToFit,
+            Action::ToggleGrid,
+            Action::ToggleOnionSkin,
+            Action::ToggleTiledPreview,
+            Action::ToggleAppearance,
+            Action::PreviousFrame,
+            Action::NextFrame,
+        ];
+        for kind in &kinds {
+            match kind {
+                Action::New
+                | Action::Open
+                | Action::Save
+                | Action::SaveAs
+                | Action::Close
+                | Action::ExportPng
+                | Action::ExportGif
+                | Action::ExportApng
+                | Action::ExportWebp
+                | Action::ExportSheet
+                | Action::ExportSequence
+                | Action::ImportSheet
+                | Action::LoadPalette
+                | Action::SavePalette
+                | Action::Edit(_)
+                | Action::Toggle(_)
+                | Action::UseTool(_)
+                | Action::SwapColours
+                | Action::PlayPause
+                | Action::ZoomIn
+                | Action::ZoomOut
+                | Action::ZoomToFit
+                | Action::ToggleGrid
+                | Action::ToggleOnionSkin
+                | Action::ToggleTiledPreview
+                | Action::ToggleAppearance
+                | Action::PreviousFrame
+                | Action::NextFrame => {}
+                // Opening the palette from the palette, and the onion-skin
+                // sliders, aren't things to search for by name.
+                Action::CommandPalette | Action::OnionSkin { .. } => unreachable!("not listed above"),
+            }
+        }
+        kinds
+    }
+
+    #[test]
+    fn the_command_palette_reaches_every_kind_of_action() {
+        let entries = palette_entries(Rgba::BLACK);
+        let found = |wanted: &Action| {
+            entries.iter().any(|(_, action)| std::mem::discriminant(action) == std::mem::discriminant(wanted))
+        };
+        for kind in every_kind_of_action() {
+            assert!(found(&kind), "nothing in Ctrl+K does {kind:?}");
+        }
+    }
+
+    #[test]
+    fn the_command_palette_reaches_every_panel_and_tool() {
+        let entries = palette_entries(Rgba::BLACK);
+        for panel in Panel::ALL.into_iter().filter(|&panel| panel != Panel::NewDocument) {
+            assert!(entries.iter().any(|(_, a)| *a == Action::Toggle(panel)), "{panel:?}");
+        }
+        for tool in Tool::ALL {
+            assert!(entries.iter().any(|(_, a)| *a == Action::UseTool(tool)), "{tool:?}");
+        }
+    }
+
+    #[test]
+    fn every_palette_entry_has_its_own_name() {
+        let entries = palette_entries(Rgba::BLACK);
+        let mut names: Vec<&str> = entries.iter().map(|(name, _)| name.as_str()).collect();
+        names.sort_unstable();
+        let before = names.len();
+        names.dedup();
+        assert_eq!(names.len(), before, "two entries share a name, so one can never be told apart");
+    }
 
     #[test]
     fn fuzzy_matching_finds_letters_in_order() {

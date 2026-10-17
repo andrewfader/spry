@@ -8,6 +8,7 @@
 use super::canvas::{self, CanvasInput, CanvasRequest, CanvasView};
 use super::file_browser::{BrowserOutcome, FileBrowser, Purpose};
 use super::settings::Settings;
+use super::shortcuts;
 use super::textures::TextureCache;
 use super::theme::{self, Appearance};
 use super::tools::{Tool, ToolSettings};
@@ -50,6 +51,21 @@ pub enum Panel {
 }
 
 impl Panel {
+    pub const ALL: [Panel; 12] = [
+        Panel::Layers,
+        Panel::Timeline,
+        Panel::Palette,
+        Panel::Preview,
+        Panel::Versions,
+        Panel::Notes,
+        Panel::Assistant,
+        Panel::Generate,
+        Panel::Export,
+        Panel::Settings,
+        Panel::NewDocument,
+        Panel::ResizeCanvas,
+    ];
+
     pub fn title(self) -> &'static str {
         match self {
             Panel::Layers => "Layers",
@@ -661,38 +677,12 @@ impl App {
     // ----- keyboard -------------------------------------------------------
 
     fn handle_shortcuts(&mut self, ctx: &egui::Context) {
-        use egui::{Key, KeyboardShortcut, Modifiers};
-        let command = |key| KeyboardShortcut::new(Modifiers::COMMAND, key);
-        let command_shift = |key| KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, key);
-        let bindings: Vec<(KeyboardShortcut, Action)> = vec![
-            (command_shift(Key::Z), Action::Edit(Command::Redo)),
-            (command(Key::Z), Action::Edit(Command::Undo)),
-            (command(Key::Y), Action::Edit(Command::Redo)),
-            (command(Key::K), Action::CommandPalette),
-            (command_shift(Key::S), Action::SaveAs),
-            (command(Key::S), Action::Save),
-            (command(Key::O), Action::Open),
-            (command(Key::N), Action::New),
-            (command(Key::W), Action::Close),
-            (command(Key::C), Action::Edit(Command::Copy)),
-            (command(Key::X), Action::Edit(Command::Cut)),
-            (command(Key::V), Action::Edit(Command::Paste { at: None })),
-            (command(Key::A), Action::Edit(Command::SelectAll)),
-            (command(Key::D), Action::Edit(Command::SelectNone)),
-            (command_shift(Key::I), Action::Edit(Command::InvertSelection)),
-            (command(Key::E), Action::Toggle(Panel::Export)),
-            (command(Key::Plus), Action::ZoomIn),
-            (command(Key::Equals), Action::ZoomIn),
-            (command(Key::Minus), Action::ZoomOut),
-            (command(Key::Num0), Action::ZoomToFit),
-            (KeyboardShortcut::new(Modifiers::ALT, Key::OpenBracket), Action::PreviousFrame),
-            (KeyboardShortcut::new(Modifiers::ALT, Key::CloseBracket), Action::NextFrame),
-        ];
+        use egui::Modifiers;
         let mut triggered = Vec::new();
         ctx.input_mut(|input| {
-            for (shortcut, action) in &bindings {
-                if input.consume_shortcut(shortcut) {
-                    triggered.push(action.clone());
+            for (shortcut, action) in shortcuts::chords() {
+                if input.consume_shortcut(&shortcut) {
+                    triggered.push(action);
                 }
             }
         });
@@ -700,50 +690,14 @@ impl App {
         // Single keys only when no text field has focus.
         if !ctx.wants_keyboard_input() {
             ctx.input(|input| {
-                // Whole-cel transforms are easy to hit by accident, so like
-                // Aseprite they need Shift.
-                if input.modifiers.matches_exact(Modifiers::SHIFT) {
-                    let shifted = [
-                        (Key::H, Action::Edit(Command::FlipHorizontal)),
-                        (Key::V, Action::Edit(Command::FlipVertical)),
-                        (Key::R, Action::Edit(Command::RotateClockwise)),
-                    ];
-                    for (key, action) in shifted {
-                        if input.key_pressed(key) {
-                            triggered.push(action);
-                        }
-                    }
-                }
-                if input.modifiers.any() {
-                    return;
-                }
-                for tool in Tool::ALL {
-                    if tool.shortcut().is_some_and(|key| input.key_pressed(key)) {
-                        triggered.push(Action::UseTool(tool));
-                    }
-                }
-                let singles = [
-                    (Key::X, Action::SwapColours),
-                    (Key::Enter, Action::PlayPause),
-                    (Key::Delete, Action::Edit(Command::DeleteSelection)),
-                    (Key::Backspace, Action::Edit(Command::DeleteSelection)),
-                    (Key::Escape, Action::Edit(Command::Anchor)),
-                    (Key::Comma, Action::PreviousFrame),
-                    (Key::Period, Action::NextFrame),
-                    (Key::Tab, Action::ToggleOnionSkin),
-                ];
-                for (key, action) in singles {
-                    if input.key_pressed(key) {
-                        triggered.push(action);
-                    }
-                }
-                let nudges =
-                    [(Key::ArrowLeft, -1, 0), (Key::ArrowRight, 1, 0), (Key::ArrowUp, 0, -1), (Key::ArrowDown, 0, 1)];
-                for (key, dx, dy) in nudges {
-                    if input.key_pressed(key) {
-                        triggered.push(Action::Edit(Command::MoveFloating { dx, dy }));
-                    }
-                }
+                let keys = if input.modifiers.matches_exact(Modifiers::SHIFT) {
+                    shortcuts::shifted_keys()
+                } else if input.modifiers.any() {
+                    Vec::new()
+                } else {
+                    shortcuts::single_keys()
+                };
+                triggered.extend(keys.into_iter().filter(|(key, _)| input.key_pressed(*key)).map(|(_, action)| action));
             });
         }
         for action in triggered {

@@ -9,6 +9,7 @@ mod canvas;
 mod file_browser;
 mod panels;
 mod settings;
+mod shortcuts;
 mod textures;
 mod theme;
 mod tools;
