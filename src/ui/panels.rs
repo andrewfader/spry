@@ -856,12 +856,12 @@ impl App {
             // Only the chosen version is compared, and only when the
             // document changes, so a long history costs nothing per frame.
             let key = (document.id, version.id, editor.revision);
-            let old = version.sprite.composite(frame_of(&version.sprite));
+            let old = || version.sprite.composite(frame_of(&version.sprite));
             let changed = match self.version_diff {
                 Some((cached_key, count)) if cached_key == key => count,
                 _ => {
                     let count =
-                        crate::editor::document::changed_pixels(&old, &editor.composite_for_display(editor.frame))
+                        crate::editor::document::changed_pixels(&old(), &editor.composite_for_display(editor.frame))
                             .len();
                     self.version_diff = Some((key, count));
                     count
@@ -870,13 +870,11 @@ impl App {
             let overlay = self
                 .textures
                 .get(ctx, &format!("{prefix}diff{}", version.id), editor.revision, || {
-                    crate::editor::document::difference_overlay(&old, &editor.composite_for_display(editor.frame))
+                    crate::editor::document::difference_overlay(&old(), &editor.composite_for_display(editor.frame))
                 })
                 .id();
-            let thumbnail = self
-                .textures
-                .get(ctx, &format!("{prefix}version{}", version.id), version.id as u64, || old.clone())
-                .id();
+            let thumbnail =
+                self.textures.get(ctx, &format!("{prefix}version{}", version.id), version.id as u64, old).id();
             let size = Vec2::new(version.sprite.width as f32, version.sprite.height as f32)
                 * (110.0 / version.sprite.width.max(version.sprite.height) as f32);
             ui.label(RichText::new(format!("Version {} · {}", version.id, version.message)).strong());
