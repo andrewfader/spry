@@ -1,6 +1,7 @@
 //! Files: the `.spry` format, image formats, and every export. This is the
 //! only place Spry touches the filesystem for documents.
 
+pub mod aseprite;
 pub mod raster_formats;
 pub mod sheet;
 pub mod spry_file;
@@ -12,14 +13,25 @@ use std::path::{Path, PathBuf};
 pub use raster_formats::{decode_gif, decode_image, encode_gif, encode_png};
 pub use sheet::{SheetLayout, SheetOptions, SpriteSheet};
 
-/// Opens anything Spry can read: a `.spry` document, or a PNG/GIF, which
-/// becomes a new document (one frame per GIF frame).
+/// Opens anything Spry can read: a `.spry` document, or an Aseprite file,
+/// PNG or GIF, which becomes a new document (one frame per GIF frame).
 pub fn open(path: &Path) -> Result<Document> {
+    open_with_notices(path).map(|(document, _)| document)
+}
+
+/// Like `open`, plus notes on anything that couldn't come across exactly
+/// (so far only Aseprite files have any).
+pub fn open_with_notices(path: &Path) -> Result<(Document, Vec<String>)> {
     let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+    let opening = || format!("opening {}", path.display());
     match extension_of(path).as_str() {
-        "spry" => spry_file::decode(&bytes).with_context(|| format!("opening {}", path.display())),
-        "gif" => document_from_animation(decode_gif(&bytes)?),
-        _ => document_from_image(decode_image(&bytes)?),
+        "spry" => Ok((spry_file::decode(&bytes).with_context(opening)?, Vec::new())),
+        "aseprite" | "ase" => {
+            let import = aseprite::decode(&bytes).with_context(opening)?;
+            Ok((import.document, import.notices))
+        }
+        "gif" => Ok((document_from_animation(decode_gif(&bytes)?)?, Vec::new())),
+        _ => Ok((document_from_image(decode_image(&bytes)?)?, Vec::new())),
     }
 }
 

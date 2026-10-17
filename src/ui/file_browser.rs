@@ -33,7 +33,7 @@ impl Purpose {
 
     pub fn extensions(self) -> &'static [&'static str] {
         match self {
-            Purpose::Open => &["spry", "png", "gif"],
+            Purpose::Open => &["spry", "aseprite", "ase", "png", "gif"],
             Purpose::SaveDocument => &["spry"],
             Purpose::ExportPng | Purpose::ExportSheet | Purpose::ImportSheet => &["png"],
             Purpose::ExportGif => &["gif"],

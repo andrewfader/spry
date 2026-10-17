@@ -11,24 +11,29 @@ use std::path::{Path, PathBuf};
 pub struct Studio {
     pub editor: Editor,
     pub path: Option<PathBuf>,
+    /// What didn't come across exactly when the file was opened, such as
+    /// an Aseprite blend mode, for the UI to tell the user.
+    pub notices: Vec<String>,
 }
 
 impl Studio {
     pub fn new(width: u32, height: u32) -> Studio {
-        Studio { editor: Editor::new(width, height), path: None }
+        Studio { editor: Editor::new(width, height), path: None, notices: Vec::new() }
     }
 
     pub fn open(path: &Path) -> Result<Studio> {
-        let document = io::open(path)?;
-        // Images open as new, unsaved documents. Only .spry files keep the path.
+        let (document, notices) = io::open_with_notices(path)?;
+        // Images and Aseprite files open as new, unsaved documents, so
+        // saving never overwrites them. Only .spry files keep the path.
         let is_spry = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("spry"));
-        let mut studio = Studio { editor: Editor::with_document(document), path: is_spry.then(|| path.to_path_buf()) };
+        let path = is_spry.then(|| path.to_path_buf());
+        let mut studio = Studio { editor: Editor::with_document(document), path, notices };
         studio.editor.mark_saved();
         Ok(studio)
     }
 
     pub fn from_document(document: Document) -> Studio {
-        Studio { editor: Editor::with_document(document), path: None }
+        Studio { editor: Editor::with_document(document), path: None, notices: Vec::new() }
     }
 
     /// The name shown in tabs and window titles.

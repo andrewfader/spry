@@ -38,8 +38,11 @@ dither-gradient tool draws ordered gradients between two colours.
 
 **Aseprite-style animation.** Layers with opacity, visibility, lock, reorder,
 duplicate and merge down. Frames with per-frame durations, tags with
-forward / reverse / ping-pong loops, onion skin, a live preview, and timeline
-thumbnails.
+forward / reverse / ping-pong loops, onion skin (up to 8 frames each way,
+fading with distance), a live preview, and timeline thumbnails. Opens
+`.aseprite` / `.ase` files: layers, cels and offsets, linked cels, tags,
+palette, slices, and RGBA, grayscale and indexed colour. Group layers are
+flattened and blend modes come in as normal, and the import says so.
 
 **Clones.** "Clone frame" makes linked cels: paint one and every linked cel
 changes. Unlink when you want them to part ways. There's also a clone stamp
@@ -85,13 +88,17 @@ claude mcp add spry -- spry mcp path/to/sprite.spry
 **AI assistant.** A chat panel driven by Claude (`claude-opus-5-5` by
 default, with server-side refusal fallback) or a local Ollama model. It uses
 the same tools as MCP and sees the canvas, and one Ctrl+Z undoes its whole
-turn.
+turn. It keeps working on the document it started on even if you switch
+tabs, and a document it creates opens in a new tab.
 
 **Diffusion.** Generate through Automatic1111/Forge (`--api`) or ComfyUI,
 with presets for small pixel-art checkpoints, Pixel Art XL, LCM/Turbo models,
-item icons and tiles. Results are downscaled by dominant colour, cleared of
-their backdrop, and quantised to your palette before they arrive as a new
-layer. img2img can restyle the current frame.
+item icons and tiles, plus any LoRA by name and weight (a prompt tag for
+Automatic1111, a LoraLoader node for ComfyUI). Images are generated in the
+canvas's shape, then downscaled by dominant colour, cleared of their
+backdrop, and quantised to your palette before they arrive as a new layer
+in the document they were asked for. img2img restyles the current frame on
+both backends. ComfyUI can also use your own exported API workflow.
 
 **Glass UI.** A luminous backdrop, translucent panels you can float anywhere,
 dark and light glass, a command palette (Ctrl+K) that reaches every action,

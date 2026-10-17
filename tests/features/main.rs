@@ -5,6 +5,7 @@ mod support;
 mod ai_agent;
 mod ai_diffusion;
 mod animation;
+mod aseprite_import;
 mod clones;
 mod command_line;
 mod dithering;

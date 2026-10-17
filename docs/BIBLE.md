@@ -272,3 +272,23 @@ Built after the core, each with its own scenarios when it starts:
 - **Tween frames**: generate in-betweens by moving a selection along a path.
 - **Palette from prompt**: the LLM proposes a palette for a mood.
 - **Animation easing preview**: timeline shows the timing curve.
+
+### 20. Opening Aseprite files (`aseprite_import.rs`)
+Most pixel artists' existing work is in `.aseprite`/`.ase` files, so Spry
+opens them (the published file spec) as new, unsaved documents.
+- Imported: canvas size, frames and their durations, layers (name,
+  visibility, lock, opacity), cels at their offsets (raw, compressed and
+  linked, so clones stay clones), cel opacity (baked into the pixels), tags
+  with direction, the palette, slices, and RGBA, grayscale and indexed
+  colour modes.
+- Not representable in Spry yet: group layers (their children import as
+  ordinary layers), blend modes other than normal, tilemap layers, and
+  per-frame slice keys. Each is named in the import report, so nothing
+  vanishes without a word.
+- Given an Aseprite file with two layers, a cel offset by (2, 3) and a
+  linked cel, when I open it, then the pixels sit at the offset, the linked
+  frames share one image, and the layer names match.
+- Given an indexed-colour file, when I open it, then the transparent index
+  becomes transparent and every other index takes its palette colour.
+- Given a truncated or corrupt file, when I open it, then I get an error
+  saying so, never a crash.

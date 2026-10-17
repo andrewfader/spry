@@ -485,8 +485,11 @@ impl App {
             Ok(studio) => {
                 self.settings.remember_file(path);
                 self.persist_settings();
+                self.status = match studio.notices.as_slice() {
+                    [] => format!("Opened {}", path.display()),
+                    notices => format!("Opened {}. Note: {}", path.display(), notices.join("; ")),
+                };
                 self.add_document(studio);
-                self.status = format!("Opened {}", path.display());
             }
             Err(error) => self.status = format!("Couldn't open {}: {error:#}", path.display()),
         }
