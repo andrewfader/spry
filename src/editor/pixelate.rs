@@ -45,7 +45,10 @@ pub fn downscale_dominant(image: &Pixels, width: u32, height: u32) -> Pixels {
                 entry.0 += 1;
             }
         }
-        let winner = votes.into_values().max_by_key(|(count, _)| *count).map(|(_, c)| c);
+        // Ties go to the lowest colour key, not to HashMap order, so the
+        // same picture always gives the same sprite.
+        let winner =
+            votes.into_iter().max_by(|a, b| a.1 .0.cmp(&b.1 .0).then_with(|| b.0.cmp(&a.0))).map(|(_, (_, c))| c);
         let colour = winner.unwrap_or(Rgba::TRANSPARENT);
         out.set(x, y, if colour.a() < 128 { Rgba::TRANSPARENT } else { colour.with_alpha(255) });
     }
@@ -172,6 +175,18 @@ mod tests {
         let big = two_tone(30, Rgba::BLACK, Rgba::WHITE);
         let small = downscale_dominant(&big, 7, 7);
         assert!(small.colours().iter().all(|&c| c == Rgba::BLACK || c == Rgba::WHITE));
+    }
+
+    #[test]
+    fn a_tied_vote_always_goes_the_same_way() {
+        let mut checker = Pixels::new(2, 2);
+        checker.set(0, 0, Rgba::BLACK);
+        checker.set(1, 1, Rgba::BLACK);
+        checker.set(1, 0, Rgba::WHITE);
+        checker.set(0, 1, Rgba::WHITE);
+        let first = downscale_dominant(&checker, 1, 1);
+        assert!((0..50).all(|_| downscale_dominant(&checker, 1, 1) == first));
+        assert_eq!(first.get(0, 0), Rgba::BLACK);
     }
 
     #[test]

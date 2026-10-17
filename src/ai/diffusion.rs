@@ -27,8 +27,10 @@ pub enum Backend {
         url: String,
         /// An API-format workflow with `{{prompt}}`, `{{negative}}`,
         /// `{{seed}}`, `{{steps}}`, `{{cfg}}`, `{{width}}`, `{{height}}` and
-        /// `{{checkpoint}}` placeholders. `None` uses Spry's built-in
-        /// txt2img graph.
+        /// `{{checkpoint}}` placeholders, plus `{{init_image}}` and
+        /// `{{denoise}}` if it can restyle a frame, and `{{lora}}` and
+        /// `{{lora_weight}}` if it loads a LoRA. `None` uses Spry's
+        /// built-in graphs.
         workflow: Option<String>,
         checkpoint: String,
     },
@@ -51,6 +53,17 @@ pub struct Preset {
     /// The size the model was trained at. Spry generates at this size and
     /// pixelates down to the canvas.
     pub native_size: u32,
+    /// The LoRA this preset is meant for, offered as the form's default.
+    #[serde(default)]
+    pub suggested_lora: Option<String>,
+}
+
+/// A LoRA (a small add-on network, which is how most pixel-art styles
+/// ship) and how strongly to apply it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Lora {
+    pub name: String,
+    pub weight: f32,
 }
 
 pub fn presets() -> Vec<Preset> {
@@ -66,14 +79,16 @@ pub fn presets() -> Vec<Preset> {
             steps: 20,
             cfg: 7.0,
             native_size: 512,
+            suggested_lora: None,
         },
         Preset {
             name: "Pixel Art XL LoRA (SDXL)".into(),
-            prompt_suffix: "pixel art, <lora:pixel-art-xl:1.0>, game asset, flat shading, plain background".into(),
+            prompt_suffix: "pixel art, game asset, flat shading, plain background".into(),
             negative: negative.into(),
             steps: 24,
             cfg: 6.0,
             native_size: 1024,
+            suggested_lora: Some("pixel-art-xl".into()),
         },
         Preset {
             name: "Fast micro model (LCM / Turbo)".into(),
@@ -82,6 +97,7 @@ pub fn presets() -> Vec<Preset> {
             steps: 6,
             cfg: 1.5,
             native_size: 512,
+            suggested_lora: None,
         },
         Preset {
             name: "Item icon".into(),
@@ -91,6 +107,7 @@ pub fn presets() -> Vec<Preset> {
             steps: 20,
             cfg: 7.0,
             native_size: 512,
+            suggested_lora: None,
         },
         Preset {
             name: "Tileable texture".into(),
@@ -99,6 +116,7 @@ pub fn presets() -> Vec<Preset> {
             steps: 20,
             cfg: 7.0,
             native_size: 512,
+            suggested_lora: None,
         },
     ]
 }
@@ -111,6 +129,10 @@ pub struct Generation {
     /// For img2img: the current frame, and how far to move away from it
     /// (0 = keep, 1 = ignore).
     pub init_image: Option<(Pixels, f32)>,
+    /// The canvas the result will land on, so the model paints the same
+    /// shape instead of a square that gets squashed.
+    pub canvas: (u32, u32),
+    pub lora: Option<Lora>,
 }
 
 /// What to do with the generated picture once it arrives.
@@ -125,6 +147,12 @@ pub struct Landing {
 
 fn agent() -> ureq::Agent {
     ureq::Agent::config_builder().timeout_global(Some(Duration::from_secs(600))).build().into()
+}
+
+/// An `f32` setting as the decimal the user typed. Widening 0.8f32 to JSON
+/// directly would send 0.800000011920929.
+fn tidy(value: f32) -> f64 {
+    (f64::from(value) * 1000.0).round() / 1000.0
 }
 
 fn base64_png(pixels: &Pixels) -> Result<String> {
@@ -163,19 +191,22 @@ pub fn generation_size(preset: &Preset, canvas_width: u32, canvas_height: u32) -
 
 fn automatic1111(url: &str, generation: &Generation) -> Result<Pixels> {
     let preset = &generation.preset;
+    let (width, height) = generation_size(preset, generation.canvas.0, generation.canvas.1);
     let (endpoint, mut body) = match &generation.init_image {
         Some((init, strength)) => {
             let (width, height) = generation_size(preset, init.width(), init.height());
             let enlarged = init.scaled_up((width / init.width()).max(1));
-            let body = json!({ "init_images": [base64_png(&enlarged)?], "denoising_strength": strength, "width": width, "height": height });
+            let body = json!({ "init_images": [base64_png(&enlarged)?], "denoising_strength": tidy(*strength), "width": width, "height": height });
             ("img2img", body)
         }
-        None => ("txt2img", json!({ "width": preset.native_size, "height": preset.native_size })),
+        None => ("txt2img", json!({ "width": width, "height": height })),
     };
-    body["prompt"] = json!(full_prompt(generation));
+    // Automatic1111 loads LoRAs from a tag inside the prompt.
+    let lora_tag = generation.lora.as_ref().map(|lora| format!(", <lora:{}:{}>", lora.name, tidy(lora.weight)));
+    body["prompt"] = json!(full_prompt(generation) + lora_tag.as_deref().unwrap_or(""));
     body["negative_prompt"] = json!(preset.negative);
     body["steps"] = json!(preset.steps);
-    body["cfg_scale"] = json!(preset.cfg);
+    body["cfg_scale"] = json!(tidy(preset.cfg));
     body["seed"] = json!(generation.seed);
     let reply: Value = agent()
         .post(&format!("{url}/sdapi/v1/{endpoint}"))
@@ -196,8 +227,8 @@ fn decode_base64_image(encoded: &str) -> Result<Pixels> {
     decode_image(&bytes)
 }
 
-/// Spry's built-in ComfyUI graph: checkpoint → prompts → empty latent →
-/// KSampler → VAE decode → save.
+/// Spry's built-in ComfyUI txt2img graph: checkpoint → prompts → empty
+/// latent → KSampler → VAE decode → save.
 pub const DEFAULT_COMFY_WORKFLOW: &str = r#"{
   "4": { "class_type": "CheckpointLoaderSimple", "inputs": { "ckpt_name": "{{checkpoint}}" } },
   "6": { "class_type": "CLIPTextEncode", "inputs": { "text": "{{prompt}}", "clip": ["4", 1] } },
@@ -207,6 +238,43 @@ pub const DEFAULT_COMFY_WORKFLOW: &str = r#"{
   "8": { "class_type": "VAEDecode", "inputs": { "samples": ["3", 0], "vae": ["4", 2] } },
   "9": { "class_type": "SaveImage", "inputs": { "filename_prefix": "spry", "images": ["8", 0] } }
 }"#;
+
+/// The built-in img2img graph: the uploaded frame is encoded into the
+/// latent the sampler starts from, and `denoise` sets how far it strays.
+pub const DEFAULT_COMFY_IMG2IMG_WORKFLOW: &str = r#"{
+  "4": { "class_type": "CheckpointLoaderSimple", "inputs": { "ckpt_name": "{{checkpoint}}" } },
+  "6": { "class_type": "CLIPTextEncode", "inputs": { "text": "{{prompt}}", "clip": ["4", 1] } },
+  "7": { "class_type": "CLIPTextEncode", "inputs": { "text": "{{negative}}", "clip": ["4", 1] } },
+  "11": { "class_type": "LoadImage", "inputs": { "image": "{{init_image}}" } },
+  "12": { "class_type": "VAEEncode", "inputs": { "pixels": ["11", 0], "vae": ["4", 2] } },
+  "3": { "class_type": "KSampler", "inputs": { "seed": "{{seed}}", "steps": "{{steps}}", "cfg": "{{cfg}}", "sampler_name": "euler", "scheduler": "normal", "denoise": "{{denoise}}", "model": ["4", 0], "positive": ["6", 0], "negative": ["7", 0], "latent_image": ["12", 0] } },
+  "8": { "class_type": "VAEDecode", "inputs": { "samples": ["3", 0], "vae": ["4", 2] } },
+  "9": { "class_type": "SaveImage", "inputs": { "filename_prefix": "spry", "images": ["8", 0] } }
+}"#;
+
+/// Puts a LoraLoader between the checkpoint (node "4") and everything
+/// that read its model or CLIP, which is how ComfyUI applies a LoRA. Only
+/// used on Spry's own graphs, whose node ids are known.
+fn insert_lora(graph: &mut Value, lora: &Lora) {
+    const LORA_NODE: &str = "10";
+    let Some(nodes) = graph.as_object_mut() else { return };
+    for node in nodes.values_mut() {
+        let Some(inputs) = node["inputs"].as_object_mut() else { continue };
+        for (name, input) in inputs.iter_mut() {
+            let reads_checkpoint = input[0] == "4" && (input[1] == 0 || input[1] == 1);
+            if reads_checkpoint && (name == "model" || name == "clip") {
+                input[0] = json!(LORA_NODE);
+            }
+        }
+    }
+    nodes.insert(
+        LORA_NODE.into(),
+        json!({ "class_type": "LoraLoader", "inputs": {
+            "lora_name": lora.name, "strength_model": tidy(lora.weight), "strength_clip": tidy(lora.weight),
+            "model": ["4", 0], "clip": ["4", 1]
+        } }),
+    );
+}
 
 /// Fills a workflow's placeholders. A string that is exactly a
 /// placeholder becomes a typed JSON value (so `"{{steps}}"` becomes the
@@ -238,19 +306,8 @@ fn fill_placeholders(node: &mut Value, values: &[(&str, Value)]) {
 }
 
 fn comfyui(url: &str, workflow: Option<&str>, checkpoint: &str, generation: &Generation) -> Result<Pixels> {
-    let preset = &generation.preset;
-    let values = [
-        ("prompt", json!(full_prompt(generation))),
-        ("negative", json!(preset.negative)),
-        ("seed", json!(generation.seed)),
-        ("steps", json!(preset.steps)),
-        ("cfg", json!(preset.cfg)),
-        ("width", json!(preset.native_size)),
-        ("height", json!(preset.native_size)),
-        ("checkpoint", json!(checkpoint)),
-    ];
-    let graph = fill_workflow(workflow.unwrap_or(DEFAULT_COMFY_WORKFLOW), &values)?;
     let http = agent();
+    let graph = comfy_graph(&http, url, workflow, checkpoint, generation)?;
     let queued: Value = http
         .post(&format!("{url}/prompt"))
         .send_json(json!({ "prompt": graph, "client_id": "spry" }))
@@ -281,6 +338,81 @@ fn comfyui(url: &str, workflow: Option<&str>, checkpoint: &str, generation: &Gen
         .limit(64 * 1024 * 1024)
         .read_to_vec()?;
     decode_image(&bytes)
+}
+
+/// The filled-in graph to queue: the user's workflow or Spry's own, with
+/// the frame uploaded first when restyling.
+fn comfy_graph(
+    http: &ureq::Agent,
+    url: &str,
+    workflow: Option<&str>,
+    checkpoint: &str,
+    generation: &Generation,
+) -> Result<Value> {
+    let preset = &generation.preset;
+    let (width, height) = generation_size(preset, generation.canvas.0, generation.canvas.1);
+    let mut values = vec![
+        ("prompt", json!(full_prompt(generation))),
+        ("negative", json!(preset.negative)),
+        ("seed", json!(generation.seed)),
+        ("steps", json!(preset.steps)),
+        ("cfg", json!(tidy(preset.cfg))),
+        ("width", json!(width)),
+        ("height", json!(height)),
+        ("checkpoint", json!(checkpoint)),
+    ];
+    if let Some(lora) = &generation.lora {
+        values.extend([("lora", json!(lora.name)), ("lora_weight", json!(tidy(lora.weight)))]);
+    }
+    let template = match (workflow, &generation.init_image) {
+        (Some(custom), Some(_)) if !custom.contains("{{init_image}}") => {
+            bail!("your ComfyUI workflow has no {{{{init_image}}}} placeholder, so it can't restyle a frame")
+        }
+        (Some(custom), _) => custom,
+        (None, Some(_)) => DEFAULT_COMFY_IMG2IMG_WORKFLOW,
+        (None, None) => DEFAULT_COMFY_WORKFLOW,
+    };
+    if let Some((frame, strength)) = &generation.init_image {
+        let enlarged = frame.scaled_up((width / frame.width().max(1)).max(1));
+        values.extend([
+            ("init_image", json!(upload_to_comfyui(http, url, &enlarged)?)),
+            ("denoise", json!(tidy(*strength))),
+        ]);
+    }
+    let mut graph = fill_workflow(template, &values)?;
+    if let (None, Some(lora)) = (workflow, &generation.lora) {
+        insert_lora(&mut graph, lora);
+    }
+    Ok(graph)
+}
+
+/// Uploads a picture into ComfyUI's input folder (a multipart form post,
+/// written out by hand since it's one small file) and returns the name
+/// `LoadImage` should ask for.
+fn upload_to_comfyui(http: &ureq::Agent, url: &str, image: &Pixels) -> Result<String> {
+    const BOUNDARY: &str = "spry-upload-7c1f9a";
+    let mut body = Vec::new();
+    body.extend_from_slice(format!(
+        "--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"image\"; filename=\"spry-init.png\"\r\nContent-Type: image/png\r\n\r\n"
+    ).as_bytes());
+    body.extend_from_slice(&encode_png(image)?);
+    body.extend_from_slice(
+        format!(
+            "\r\n--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"overwrite\"\r\n\r\ntrue\r\n--{BOUNDARY}--\r\n"
+        )
+        .as_bytes(),
+    );
+    let reply: Value = http
+        .post(&format!("{url}/upload/image"))
+        .header("Content-Type", &format!("multipart/form-data; boundary={BOUNDARY}"))
+        .send(&body[..])
+        .with_context(|| format!("uploading the frame to ComfyUI at {url}"))?
+        .body_mut()
+        .read_json()
+        .context("ComfyUI's upload reply wasn't JSON")?;
+    let name = reply["name"].as_str().context("ComfyUI didn't say what it called the upload")?;
+    let subfolder = reply["subfolder"].as_str().unwrap_or("");
+    Ok(if subfolder.is_empty() { name.to_string() } else { format!("{subfolder}/{name}") })
 }
 
 /// The (filename, subfolder, type) of the first image in a ComfyUI

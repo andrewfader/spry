@@ -26,6 +26,9 @@ pub struct Settings {
     pub ollama_model: String,
     pub comfy_url: String,
     pub comfy_checkpoint: String,
+    /// A workflow exported from ComfyUI with "Save (API format)". Empty
+    /// means Spry's built-in graphs.
+    pub comfy_workflow: String,
     pub a1111_url: String,
     pub use_comfy: bool,
     pub mcp_http_enabled: bool,
@@ -45,6 +48,7 @@ impl Default for Settings {
             ollama_model: "qwen3".into(),
             comfy_url: "http://127.0.0.1:8188".into(),
             comfy_checkpoint: "v1-5-pruned-emaonly.safetensors".into(),
+            comfy_workflow: String::new(),
             a1111_url: "http://127.0.0.1:7860".into(),
             use_comfy: false,
             mcp_http_enabled: false,
@@ -91,12 +95,17 @@ impl Settings {
         }
     }
 
-    pub fn diffusion_backend(&self) -> Backend {
-        if self.use_comfy {
-            Backend::ComfyUi { url: self.comfy_url.clone(), workflow: None, checkpoint: self.comfy_checkpoint.clone() }
-        } else {
-            Backend::Automatic1111 { url: self.a1111_url.clone() }
+    pub fn diffusion_backend(&self) -> Result<Backend, String> {
+        if !self.use_comfy {
+            return Ok(Backend::Automatic1111 { url: self.a1111_url.clone() });
         }
+        let path = self.comfy_workflow.trim();
+        let workflow = if path.is_empty() {
+            None
+        } else {
+            Some(std::fs::read_to_string(path).map_err(|e| format!("couldn't read the workflow {path}: {e}"))?)
+        };
+        Ok(Backend::ComfyUi { url: self.comfy_url.clone(), workflow, checkpoint: self.comfy_checkpoint.clone() })
     }
 
     pub fn remember_file(&mut self, path: &std::path::Path) {
@@ -138,6 +147,17 @@ mod tests {
     #[test]
     fn the_chosen_backend_follows_the_comfy_toggle() {
         let settings = Settings { use_comfy: true, ..Settings::default() };
-        assert!(matches!(settings.diffusion_backend(), Backend::ComfyUi { .. }));
+        assert!(matches!(settings.diffusion_backend(), Ok(Backend::ComfyUi { workflow: None, .. })));
+    }
+
+    #[test]
+    fn a_custom_comfy_workflow_is_read_from_its_file() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("flow.json");
+        std::fs::write(&path, "{}").unwrap();
+        let settings = Settings { use_comfy: true, comfy_workflow: path.display().to_string(), ..Settings::default() };
+        assert!(matches!(settings.diffusion_backend(), Ok(Backend::ComfyUi { workflow: Some(w), .. }) if w == "{}"));
+        let missing = Settings { comfy_workflow: "/no/such/flow.json".into(), ..settings };
+        assert!(missing.diffusion_backend().unwrap_err().contains("couldn't read"));
     }
 }

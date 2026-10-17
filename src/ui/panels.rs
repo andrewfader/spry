@@ -25,6 +25,9 @@ pub struct GenerateForm {
     pub strength: f32,
     pub clear_background: bool,
     pub dither: bool,
+    pub use_lora: bool,
+    pub lora_name: String,
+    pub lora_weight: f32,
 }
 
 impl Default for GenerateForm {
@@ -38,6 +41,9 @@ impl Default for GenerateForm {
             strength: 0.6,
             clear_background: true,
             dither: false,
+            use_lora: false,
+            lora_name: String::new(),
+            lora_weight: 1.0,
         }
     }
 }
@@ -1035,9 +1041,21 @@ impl App {
             .selected_text(&presets[form.preset.min(presets.len() - 1)].name)
             .show_ui(ui, |ui| {
                 for (index, preset) in presets.iter().enumerate() {
-                    ui.selectable_value(&mut form.preset, index, &preset.name);
+                    if ui.selectable_value(&mut form.preset, index, &preset.name).clicked() {
+                        if let Some(suggested) = &preset.suggested_lora {
+                            (form.use_lora, form.lora_name) = (true, suggested.clone());
+                        }
+                    }
                 }
             });
+        ui.horizontal(|ui| {
+            ui.checkbox(&mut form.use_lora, "LoRA");
+            ui.add_enabled(
+                form.use_lora,
+                egui::TextEdit::singleline(&mut form.lora_name).hint_text("e.g. pixel-art-xl").desired_width(140.0),
+            );
+            ui.add_enabled(form.use_lora, egui::DragValue::new(&mut form.lora_weight).range(0.0..=2.0).speed(0.05));
+        });
         ui.horizontal(|ui| {
             ui.checkbox(&mut form.random_seed, "Random seed");
             ui.add_enabled(!form.random_seed, egui::DragValue::new(&mut form.seed));
@@ -1050,12 +1068,16 @@ impl App {
         ui.checkbox(&mut form.dither, "Dither to the palette");
         let backend = self.settings.diffusion_backend();
         let backend_label = match &backend {
-            diffusion::Backend::Automatic1111 { url } => format!("Automatic1111 / Forge at {url}"),
-            diffusion::Backend::ComfyUi { url, checkpoint, .. } => format!("ComfyUI at {url} ({checkpoint})"),
+            Ok(diffusion::Backend::Automatic1111 { url }) => format!("Automatic1111 / Forge at {url}"),
+            Ok(diffusion::Backend::ComfyUi { url, checkpoint, .. }) => format!("ComfyUI at {url} ({checkpoint})"),
+            Err(error) => error.clone(),
         };
         ui.weak(format!("Backend: {backend_label} (change in ⚙ Settings)"));
         let busy = self.diffusion.is_some();
-        if ui.add_enabled(!busy, egui::Button::new("✨ Generate as new layer")).clicked() {
+        let ready = !busy && backend.is_ok();
+        if let (true, Ok(backend)) =
+            (ui.add_enabled(ready, egui::Button::new("✨ Generate as new layer")).clicked(), backend)
+        {
             let form = &mut self.generate;
             if form.random_seed {
                 form.seed = fastrand::i64(0..i32::MAX as i64);
@@ -1069,6 +1091,9 @@ impl App {
                 init_image: form
                     .from_current_frame
                     .then(|| (editor.composite_for_display(editor.frame), form.strength)),
+                canvas: (sprite.width, sprite.height),
+                lora: (form.use_lora && !form.lora_name.trim().is_empty())
+                    .then(|| diffusion::Lora { name: form.lora_name.trim().to_string(), weight: form.lora_weight }),
             };
             let landing = Landing {
                 width: sprite.width,
@@ -1235,6 +1260,13 @@ impl App {
             ui.horizontal(|ui| {
                 ui.label("Checkpoint");
                 ui.text_edit_singleline(&mut self.settings.comfy_checkpoint);
+            });
+            ui.horizontal(|ui| {
+                ui.label("Workflow");
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.settings.comfy_workflow)
+                        .hint_text("built-in (or a path to an API-format .json)"),
+                );
             });
         } else {
             ui.horizontal(|ui| {
