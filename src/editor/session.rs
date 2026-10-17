@@ -21,6 +21,7 @@ use super::palette::Palette;
 use super::pixelate::quantise;
 use super::pixels::{Pixels, Rect};
 use super::raster::{self, Point};
+use super::rotsprite::{rotsprite, MAX_ROTSPRITE_SIDE};
 use super::selection::{Floating, Selection};
 use super::sprite::{Sprite, Tag};
 use std::fmt;
@@ -504,6 +505,7 @@ impl Editor {
             Command::RotateCounterClockwise => {
                 self.reorient(Pixels::rotated_counter_clockwise, "rotated 90° counter-clockwise")
             }
+            Command::Rotate { degrees } => self.rotate_by(degrees),
 
             Command::AddLayer { name } => {
                 let name = name.unwrap_or_else(|| self.sprite().next_layer_name());
@@ -1133,7 +1135,25 @@ impl Editor {
 
     /// Flips or rotates the floating pixels, or the selection (lifting it
     /// first), or else the whole cel about its centre.
-    fn reorient(&mut self, turn: fn(&Pixels) -> Pixels, summary: &str) -> EditResult {
+    fn rotate_by(&mut self, degrees: f32) -> EditResult {
+        if !degrees.is_finite() {
+            return Err(EditError::Invalid("an angle has to be a number of degrees".into()));
+        }
+        let piece = self
+            .floating
+            .as_ref()
+            .map(|floating| (floating.pixels.width(), floating.pixels.height()))
+            .or_else(|| self.selection.as_ref().and_then(Selection::bounds).map(|b| (b.width, b.height)))
+            .unwrap_or((self.sprite().width, self.sprite().height));
+        if piece.0.max(piece.1) > MAX_ROTSPRITE_SIDE {
+            return Err(EditError::Invalid(format!(
+                "Rotsprite turns pieces up to {MAX_ROTSPRITE_SIDE} pixels across; select a smaller area"
+            )));
+        }
+        self.reorient(move |image| rotsprite(image, degrees), &format!("rotated {degrees}°"))
+    }
+
+    fn reorient(&mut self, turn: impl Fn(&Pixels) -> Pixels, summary: &str) -> EditResult {
         self.ensure_drawable()?;
         if self.floating.is_none() && self.selection.is_some() {
             self.lift_selection()?;

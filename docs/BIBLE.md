@@ -124,6 +124,10 @@ file.
   or arrow keys, then stamp down.
 - Flip H/V, rotate 90°, nudge 1 px, and outline the selection with the primary
   colour.
+- Rotsprite rotation by any angle (Scale2x ×3, rotate, sample down) for
+  pieces up to 512 px: lines stay connected and no new colours appear.
+- Given a 12×4 bar rotated 30°, then it covers more rows and uses only its
+  own colour, and undo straightens it.
 
 ### 5. Layers (`layers.rs`)
 - Add, remove, rename, reorder, duplicate, merge down, toggle visibility,
@@ -285,7 +289,6 @@ file.
 Built after the core, each with its own scenarios when it starts:
 - **Auto outline / drop shadow** as one-click layer effects (implemented as
   real commands, not filters on export).
-- **Rotsprite-style clean rotation** for 15° steps.
 - **Tween frames**: generate in-betweens by moving a selection along a path.
 - **Palette from prompt**: the LLM proposes a palette for a mood.
 - **Animation easing preview**: timeline shows the timing curve.

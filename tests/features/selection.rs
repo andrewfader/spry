@@ -113,3 +113,30 @@ fn a_lasso_selects_a_freehand_shape_and_painting_stays_inside_it() {
     assert!(scenario.studio.editor.selection.as_ref().unwrap().contains(7, 7), "Shift adds to the selection");
     assert!(scenario.studio.editor.selection.as_ref().unwrap().contains(1, 1));
 }
+
+#[test]
+fn rotsprite_turns_a_selection_by_any_angle_without_new_colours() {
+    let mut scenario = given_a_blank_sprite(32, 32);
+    scenario.when(Command::DrawRect {
+        from: (10, 14),
+        to: (21, 17),
+        ink: Ink::colour(RED),
+        filled: true,
+        brush: Default::default(),
+    });
+    scenario.when(Command::SelectRect { rect: Rect::new(10, 14, 12, 4), add: false });
+    scenario.when(Command::Rotate { degrees: 30.0 }).and(Command::Anchor);
+    let painted = scenario.painted_pixels();
+    assert!(painted.iter().all(|&(x, y)| scenario.pixel(x, y) == RED), "only the bar's own colour");
+    let rows: std::collections::BTreeSet<i32> = painted.iter().map(|p| p.1).collect();
+    assert!(rows.len() > 4, "the bar now climbs across more rows: {rows:?}");
+    scenario.when(Command::Undo).and(Command::Undo);
+    assert_eq!(scenario.pixel(10, 14), RED, "undo straightens it again");
+}
+
+#[test]
+fn rotsprite_refuses_pieces_too_big_to_turn_safely() {
+    let mut scenario = given_a_blank_sprite(1024, 8);
+    scenario.when_trying(Command::Rotate { degrees: 10.0 });
+    scenario.then_it_failed_saying("select a smaller area");
+}

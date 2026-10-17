@@ -50,7 +50,7 @@ layers, and the import says so.
 changes. Unlink when you want them to part ways. There's also a clone stamp
 tool (Alt-click to pick the source).
 
-**Selection.** Rectangle and lasso select, magic wand, select all / invert, cut / copy /
+**Selection.** Rectangle and lasso select, Rotsprite rotation by any angle, magic wand, select all / invert, cut / copy /
 paste, move with mouse or arrow keys, flip, rotate 90°, and painting clipped
 to the selection.
 

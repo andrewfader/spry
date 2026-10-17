@@ -203,6 +203,17 @@ impl App {
                                 ui.close_menu();
                             }
                         }
+                        ui.separator();
+                        ui.horizontal(|ui| {
+                            ui.add(egui::DragValue::new(&mut self.rotate_degrees).range(-359.0..=359.0).suffix("°"));
+                            let rotate = ui.button("Rotsprite rotate").on_hover_text(
+                                "Turn the selection (or the whole cel) by any angle, keeping lines clean and colours in the palette",
+                            );
+                            if rotate.clicked() {
+                                action = Some(Action::Edit(Command::Rotate { degrees: self.rotate_degrees }));
+                                ui.close_menu();
+                            }
+                        });
                     });
                     ui.menu_button("Effects", |ui| {
                         let primary = self.tools.primary;
@@ -1585,6 +1596,9 @@ fn palette_entries(app: &App) -> Vec<(String, Action)> {
         ("Flip vertical", Command::FlipVertical),
         ("Rotate 90° clockwise", Command::RotateClockwise),
         ("Rotate 90° counter-clockwise", Command::RotateCounterClockwise),
+        ("Rotsprite rotate 15° clockwise", Command::Rotate { degrees: 15.0 }),
+        ("Rotsprite rotate 15° counter-clockwise", Command::Rotate { degrees: -15.0 }),
+        ("Rotsprite rotate 45° clockwise", Command::Rotate { degrees: 45.0 }),
         ("Outline with primary colour", Command::Outline { colour: primary, diagonals: false }),
         ("Thick outline with primary colour", Command::Outline { colour: primary, diagonals: true }),
         ("Drop shadow with primary colour", Command::DropShadow { colour: primary, dx: 1, dy: 1 }),

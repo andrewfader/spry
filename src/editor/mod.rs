@@ -18,6 +18,7 @@ pub mod pixelate;
 pub mod pixels;
 pub mod playback;
 pub mod raster;
+pub mod rotsprite;
 pub mod selection;
 pub mod session;
 pub mod sprite;

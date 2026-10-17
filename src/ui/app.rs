@@ -154,6 +154,8 @@ pub struct App {
     /// The Canvas Size dialog's choices while it is open.
     pub resize: Option<ResizeDraft>,
     pub layer_name_draft: Option<(usize, String)>,
+    /// The Edit menu's Rotsprite angle.
+    pub rotate_degrees: f32,
     pub palette_query: String,
     pub palette_open: bool,
     pub pending_pin: Option<(i32, i32, String)>,
@@ -197,6 +199,7 @@ impl App {
             new_document: (32, 32),
             resize: None,
             layer_name_draft: None,
+            rotate_degrees: 15.0,
             palette_query: String::new(),
             palette_open: false,
             pending_pin: None,

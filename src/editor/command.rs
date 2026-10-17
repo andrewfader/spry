@@ -202,6 +202,11 @@ pub enum Command {
     FlipVertical,
     RotateClockwise,
     RotateCounterClockwise,
+    /// Rotsprite rotation by any angle, clockwise, of the selection (or the
+    /// whole cel), about its centre.
+    Rotate {
+        degrees: f32,
+    },
 
     // ----- layers -------------------------------------------------------
     AddLayer {
