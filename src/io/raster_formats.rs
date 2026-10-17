@@ -45,12 +45,12 @@ pub fn encode_gif(frames: &[(Pixels, u32)]) -> Result<Vec<u8>> {
     {
         let mut encoder = gif::Encoder::new(&mut bytes, width as u16, height as u16, &palette.rgb_table())?;
         encoder.set_repeat(gif::Repeat::Infinite)?;
-        for (image, delay_ms) in frames {
+        let delays = centisecond_delays(frames.iter().map(|(_, delay_ms)| *delay_ms));
+        for ((image, _), delay) in frames.iter().zip(delays) {
             let mut frame = gif::Frame {
                 width: width as u16,
                 height: height as u16,
-                // GIF delays are in hundredths of a second.
-                delay: (delay_ms / 10).max(1) as u16,
+                delay,
                 dispose: gif::DisposalMethod::Background,
                 transparent: Some(GifPalette::TRANSPARENT_INDEX),
                 ..gif::Frame::default()
@@ -60,6 +60,24 @@ pub fn encode_gif(frames: &[(Pixels, u32)]) -> Result<Vec<u8>> {
         }
     }
     Ok(bytes)
+}
+
+/// GIF delays count hundredths of a second. Rounding each frame on its own
+/// drifts (three 15 ms frames would play as 60 ms or 30 ms), so each
+/// frame ends at its true time rounded, and the loop as a whole keeps its
+/// real length.
+fn centisecond_delays(delays_ms: impl Iterator<Item = u32>) -> Vec<u16> {
+    let mut elapsed_ms: u64 = 0;
+    let mut shown_cs: u64 = 0;
+    delays_ms
+        .map(|delay| {
+            elapsed_ms += u64::from(delay);
+            let ends_cs = ((elapsed_ms + 5) / 10).max(shown_cs + 1);
+            let delay_cs = (ends_cs - shown_cs).min(u64::from(u16::MAX));
+            shown_cs += delay_cs;
+            delay_cs as u16
+        })
+        .collect()
 }
 
 /// One global colour table shared by every frame, with index 0 kept for
@@ -160,6 +178,13 @@ mod tests {
         b.set(3, 3, Rgba::rgb(0, 228, 54));
         let decoded = decode_gif(&encode_gif(&[(a.clone(), 100), (b.clone(), 250)]).unwrap()).unwrap();
         assert_eq!(decoded, vec![(a, 100), (b, 250)]);
+    }
+
+    #[test]
+    fn gif_delays_round_without_drifting() {
+        assert_eq!(centisecond_delays([15, 15, 15, 15].into_iter()), vec![2, 1, 2, 1]);
+        assert_eq!(centisecond_delays([105, 100].into_iter()), vec![11, 10]);
+        assert_eq!(centisecond_delays([1, 1].into_iter()), vec![1, 1], "every frame shows for at least 10 ms");
     }
 
     #[test]
