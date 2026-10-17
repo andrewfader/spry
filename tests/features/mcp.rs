@@ -5,12 +5,19 @@ use crate::support::*;
 use base64::Engine;
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::mpsc::Receiver;
+use std::time::Duration;
+
+/// A wedged binary fails the scenario instead of hanging the whole suite.
+const REPLY_TIMEOUT: Duration = Duration::from_secs(30);
 
 struct McpSession {
     child: Child,
     input: ChildStdin,
-    output: BufReader<ChildStdout>,
+    /// Lines from the server's stdout, read on their own thread so a
+    /// missing reply can time out.
+    replies: Receiver<String>,
     next_id: u64,
 }
 
@@ -26,15 +33,22 @@ impl McpSession {
             .expect("the spry binary starts");
         let input = child.stdin.take().expect("stdin");
         let output = BufReader::new(child.stdout.take().expect("stdout"));
-        McpSession { child, input, output, next_id: 1 }
+        let (sender, replies) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            for line in output.lines().map_while(Result::ok) {
+                if sender.send(line).is_err() {
+                    break;
+                }
+            }
+        });
+        McpSession { child, input, replies, next_id: 1 }
     }
 
     fn request(&mut self, method: &str, params: Value) -> Value {
         let id = self.next_id;
         self.next_id += 1;
         writeln!(self.input, "{}", json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params })).unwrap();
-        let mut line = String::new();
-        self.output.read_line(&mut line).unwrap();
+        let line = self.replies.recv_timeout(REPLY_TIMEOUT).unwrap_or_else(|_| panic!("no reply to {method}"));
         let reply: Value = serde_json::from_str(&line).unwrap_or_else(|_| panic!("not JSON: {line}"));
         assert_eq!(reply["id"], id);
         reply
@@ -217,4 +231,31 @@ fn exports_over_mcp_only_ever_write_image_files() {
     assert_eq!(result["isError"], false, "{result}");
     assert_eq!(std::fs::read_to_string(&script).unwrap(), "echo keep me");
     assert!(folder.path().join("deploy.png").exists());
+}
+
+#[test]
+fn a_model_can_work_across_layers_and_frames_with_tools_alone() {
+    let mut scenario = given_a_blank_sprite(8, 8);
+    let ok = |result: Result<spry::mcp::tools::ToolOutput, String>| result.unwrap_or_else(|e| panic!("{e}")).text;
+
+    ok(scenario.tool("fill", json!({ "at": [0, 0], "colour": "#ff004d" })));
+    ok(scenario.tool("add_layer", json!({ "name": "Ink" })));
+    ok(scenario.tool("set_pixels", json!({ "pixels": [{ "x": 3, "y": 3, "colour": "#000000" }] })));
+    ok(scenario.tool("outline", json!({ "colour": "#29adff", "layer": 1 })));
+    assert_eq!(scenario.cel_pixel(1, 0, 2, 3), BLUE, "the outline went round the ink, on the ink layer");
+    assert_eq!(scenario.cel_pixel(0, 0, 2, 3), RED, "the layer below is untouched");
+
+    ok(scenario.tool("add_frame", json!({ "copy": true, "duration_ms": 250 })));
+    assert_eq!(scenario.sprite().frames[1].duration_ms, 250);
+    assert_eq!(scenario.cel_pixel(1, 1, 3, 3), BLACK, "a copied frame carries the art");
+    ok(scenario.tool("select_frame", json!({ "index": 0 })));
+    ok(scenario.tool("select_layer", json!({ "index": 0 })));
+    assert_eq!((scenario.studio.editor.layer, scenario.studio.editor.frame), (0, 0));
+
+    ok(scenario.tool("set_palette", json!({ "name": "Duo", "colours": ["#000000", "#ffffff"] })));
+    assert_eq!(scenario.sprite().palette.colours.len(), 2);
+    let refused = scenario.tool("set_palette", json!({ "colours": ["#000000", "chartreuse"] })).err().unwrap();
+    assert!(refused.contains("not a hex colour"), "{refused}");
+    let missing = scenario.tool("select_layer", json!({ "index": 9 })).err().unwrap();
+    assert!(missing.contains("layer 9"), "{missing}");
 }
