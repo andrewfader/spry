@@ -86,3 +86,18 @@ fn nudging_needs_something_selected() {
     scenario.when_trying(Command::MoveFloating { dx: 1, dy: 0 });
     scenario.then_it_failed_saying("nothing is selected");
 }
+
+#[test]
+fn moving_away_from_floating_pixels_lands_them_on_their_own_layer() {
+    let mut scenario = given_a_blank_sprite(8, 8);
+    scenario
+        .when(Command::SetPixels { pixels: vec![spry::editor::PixelValue { x: 0, y: 0, colour: RED }] })
+        .and(Command::AddLayer { name: None })
+        .and(Command::SelectLayer { index: 0 });
+    scenario
+        .when(Command::SelectRect { rect: spry::editor::Rect::new(0, 0, 1, 1), add: false })
+        .and(Command::MoveFloating { dx: 3, dy: 0 })
+        .and(Command::SelectLayer { index: 1 });
+    assert_eq!(scenario.cel_pixel(0, 0, 3, 0), RED);
+    assert_eq!(scenario.cel_pixel(1, 0, 3, 0), CLEAR);
+}

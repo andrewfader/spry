@@ -68,3 +68,16 @@ fn the_clone_stamp_copies_from_its_source_offset() {
     assert_eq!(scenario.pixel(9, 9), RED);
     assert_eq!(scenario.pixel(10, 9), BLUE);
 }
+
+#[test]
+fn merging_a_layer_down_onto_cloned_cels_keeps_each_frame_its_own() {
+    let mut scenario = given_a_blank_sprite(8, 8);
+    scenario.when(paint(0, 0, RED)).and(Command::DuplicateFrame { as_clone: true });
+    scenario.when(Command::AddLayer { name: Some("Eyes".into()) }).and(paint(5, 5, BLUE));
+    scenario.when(Command::SelectFrame { index: 0 }).and(paint(6, 6, GREEN));
+    scenario.when(Command::MergeDown);
+    assert_eq!(scenario.cel_pixel(0, 0, 6, 6), GREEN);
+    assert_eq!(scenario.cel_pixel(0, 0, 5, 5), CLEAR, "frame 2's eyes stay on frame 2");
+    assert_eq!(scenario.cel_pixel(0, 1, 5, 5), BLUE);
+    assert_eq!(scenario.cel_pixel(0, 1, 0, 0), RED, "both frames keep the cloned body");
+}

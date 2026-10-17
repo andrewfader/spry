@@ -171,20 +171,43 @@ impl Sprite {
     }
 
     /// Composites `index` onto the layer below it, keeping the lower layer's
-    /// name, and removes the upper one.
+    /// name, and removes the upper one. A hidden layer is dropped unpainted,
+    /// matching what was on screen.
     pub fn merge_down(&mut self, index: usize) -> bool {
         if index == 0 || index >= self.layers.len() {
             return false;
         }
-        let upper = self.layers[index].clone();
-        for frame in 0..self.frames.len() {
-            let Some(top) = self.cel_image(index, frame).cloned() else { continue };
-            let below = self.cel_image_mut(index - 1, frame);
-            below.stamp(&top, 0, 0, upper.opacity);
+        let upper = self.layers.remove(index);
+        if upper.visible {
+            self.stamp_layer_onto(&upper, index - 1);
         }
-        self.layers.remove(index);
         self.collect_unused_images();
         true
+    }
+
+    /// Paints every cel of `upper` onto layer `lower`. Each merged cel gets a
+    /// fresh image, because the lower cel may be a clone shared with frames
+    /// whose upper art differs. Frames that shared both their lower and their
+    /// upper image still look alike after the merge, so they stay linked.
+    fn stamp_layer_onto(&mut self, upper: &Layer, lower: usize) {
+        let mut merged: BTreeMap<(Option<ImageId>, ImageId), ImageId> = BTreeMap::new();
+        for frame in 0..self.frames.len() {
+            let Some(top) = upper.cels[frame] else { continue };
+            let bottom = self.layers[lower].cels[frame];
+            let id = match merged.get(&(bottom, top)) {
+                Some(&id) => id,
+                None => {
+                    let mut image = bottom
+                        .and_then(|id| self.images.get(&id))
+                        .map_or_else(|| Pixels::new(self.width, self.height), |image| (**image).clone());
+                    image.stamp(&self.images[&top], 0, 0, upper.opacity);
+                    let id = self.add_image(image);
+                    merged.insert((bottom, top), id);
+                    id
+                }
+            };
+            self.layers[lower].cels[frame] = Some(id);
+        }
     }
 
     // ----- frames -------------------------------------------------------
@@ -423,6 +446,45 @@ mod tests {
         let mut sprite = Sprite::new(4, 4);
         sprite.cel_image_mut(0, 0).set(1, 1, RED);
         assert_eq!(sprite.cel_image(0, 0).unwrap().get(1, 1), RED);
+    }
+
+    #[test]
+    fn merging_down_onto_clones_gives_each_frame_its_own_art() {
+        let mut sprite = Sprite::new(4, 4);
+        sprite.cel_image_mut(0, 0).set(0, 0, RED);
+        sprite.insert_frame(1, 100);
+        sprite.link_cel(0, 0, 1);
+        sprite.insert_layer(1, "Top");
+        sprite.cel_image_mut(1, 0).set(1, 0, Rgba::BLACK);
+        sprite.cel_image_mut(1, 1).set(2, 0, Rgba::BLACK);
+        assert!(sprite.merge_down(1));
+        let (first, second) = (sprite.cel_image(0, 0).unwrap(), sprite.cel_image(0, 1).unwrap());
+        assert_eq!((first.get(0, 0), first.get(1, 0), first.get(2, 0)), (RED, Rgba::BLACK, Rgba::TRANSPARENT));
+        assert_eq!((second.get(0, 0), second.get(1, 0), second.get(2, 0)), (RED, Rgba::TRANSPARENT, Rgba::BLACK));
+    }
+
+    #[test]
+    fn merging_down_keeps_clones_that_stay_identical_linked() {
+        let mut sprite = Sprite::new(4, 4);
+        sprite.cel_image_mut(0, 0).set(0, 0, RED);
+        sprite.insert_frame(1, 100);
+        sprite.link_cel(0, 0, 1);
+        sprite.insert_layer(1, "Top");
+        sprite.cel_image_mut(1, 0).set(1, 0, Rgba::BLACK);
+        sprite.link_cel(1, 0, 1);
+        sprite.merge_down(1);
+        assert!(sprite.is_linked(0, 0));
+    }
+
+    #[test]
+    fn merging_down_a_hidden_layer_drops_it_without_painting() {
+        let mut sprite = Sprite::new(4, 4);
+        sprite.insert_layer(1, "Hidden");
+        sprite.cel_image_mut(1, 0).set(1, 0, RED);
+        sprite.layers[1].visible = false;
+        sprite.merge_down(1);
+        assert_eq!(sprite.layers.len(), 1);
+        assert!(sprite.cel_image(0, 0).is_none_or(|image| image.get(1, 0).is_transparent()));
     }
 
     #[test]

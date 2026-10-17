@@ -172,9 +172,11 @@ impl Editor {
         match command {
             Command::Undo => return self.undo(),
             Command::Redo => return self.redo(),
-            Command::SelectLayer { index } => return self.select_layer(index),
-            Command::SelectFrame { index } => return self.select_frame(index),
             Command::Copy => return self.copy(),
+            // Moving away from floating pixels anchors them where they are,
+            // which is an edit, so only plain navigation skips the snapshot.
+            Command::SelectLayer { index } if self.floating.is_none() => return self.select_layer(index),
+            Command::SelectFrame { index } if self.floating.is_none() => return self.select_frame(index),
             _ => {}
         }
         let before = self.snapshot();
@@ -489,11 +491,9 @@ impl Editor {
                 self.document.sprite.layers[self.layer].opacity = opacity;
                 Ok(format!("set layer opacity to {opacity}"))
             }
-            Command::SelectLayer { .. }
-            | Command::SelectFrame { .. }
-            | Command::Copy
-            | Command::Undo
-            | Command::Redo => {
+            Command::SelectLayer { index } => self.select_layer(index),
+            Command::SelectFrame { index } => self.select_frame(index),
+            Command::Copy | Command::Undo | Command::Redo => {
                 unreachable!("handled before an undo snapshot is taken")
             }
 
@@ -694,6 +694,7 @@ impl Editor {
     // ----- navigation ---------------------------------------------------
 
     fn select_layer(&mut self, index: usize) -> EditResult {
+        self.anchor_floating();
         self.layer = self.check_layer_index(index)?;
         Ok(format!("layer \"{}\"", self.sprite().layers[self.layer].name))
     }
@@ -1131,6 +1132,33 @@ mod tests {
         editor.execute(Command::Anchor).unwrap();
         assert_eq!(pixel(&editor, 0, 0), Rgba::TRANSPARENT);
         assert_eq!(pixel(&editor, 3, 2), RED);
+    }
+
+    #[test]
+    fn switching_layers_anchors_floating_pixels_on_the_layer_they_came_from() {
+        let mut editor = editor();
+        editor.execute(Command::SetPixels { pixels: vec![PixelValue { x: 0, y: 0, colour: RED }] }).unwrap();
+        editor.execute(Command::AddLayer { name: None }).unwrap();
+        editor.execute(Command::SelectLayer { index: 0 }).unwrap();
+        editor.execute(Command::SelectRect { rect: Rect::new(0, 0, 1, 1), add: false }).unwrap();
+        editor.execute(Command::MoveFloating { dx: 2, dy: 0 }).unwrap();
+        editor.execute(Command::SelectLayer { index: 1 }).unwrap();
+        assert_eq!(editor.sprite().cel_image(0, 0).unwrap().get(2, 0), RED);
+        assert!(editor.sprite().cel_image(1, 0).is_none_or(|image| image.get(2, 0).is_transparent()));
+    }
+
+    #[test]
+    fn anchoring_by_switching_frames_is_undoable() {
+        let mut editor = editor();
+        editor.execute(Command::SetPixels { pixels: vec![PixelValue { x: 0, y: 0, colour: RED }] }).unwrap();
+        editor.execute(Command::AddFrame).unwrap();
+        editor.execute(Command::SelectFrame { index: 0 }).unwrap();
+        editor.execute(Command::SelectRect { rect: Rect::new(0, 0, 1, 1), add: false }).unwrap();
+        editor.execute(Command::MoveFloating { dx: 2, dy: 0 }).unwrap();
+        editor.execute(Command::SelectFrame { index: 1 }).unwrap();
+        editor.execute(Command::Undo).unwrap();
+        assert!(editor.floating.is_some(), "undo puts the piece back in the air");
+        assert_eq!(editor.frame, 0);
     }
 
     #[test]
