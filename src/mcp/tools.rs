@@ -298,6 +298,13 @@ fn path(args: &Value, key: &str) -> Result<PathBuf, String> {
     required_string(args, key).map(PathBuf::from)
 }
 
+/// An export path with its extension forced to `extension`, so a model can
+/// only ever write the kind of file it asked to export, never over a
+/// script or a config file.
+fn export_path(args: &Value, extension: &str) -> Result<PathBuf, String> {
+    path(args, "path").map(|path| path.with_extension(extension))
+}
+
 fn ink(args: &Value) -> Result<Ink, String> {
     if args.get("erase").and_then(Value::as_bool).unwrap_or(false) {
         return Ok(Ink::Erase);
@@ -503,7 +510,7 @@ pub fn call(studio: &mut Studio, name: &str, args: &Value) -> ToolResult {
         }
         "restore_version" => run(studio, Command::RestoreVersion { id: required_integer(args, "id")?.max(0) as u32 }),
         "export_png" => {
-            let target_path = path(args, "path")?;
+            let target_path = export_path(args, "png")?;
             let frame = integer(args, "frame").map_or(studio.editor.frame, |f| f.max(0) as usize);
             if frame >= studio.editor.sprite().frame_count() {
                 return Err(format!("there is no frame {frame}"));
@@ -513,13 +520,13 @@ pub fn call(studio: &mut Studio, name: &str, args: &Value) -> ToolResult {
             Ok(ToolOutput::text(format!("wrote {}", target_path.display())))
         }
         "export_gif" => {
-            let target_path = path(args, "path")?;
+            let target_path = export_path(args, "gif")?;
             io::export_gif(&target_path, studio.editor.sprite(), string(args, "tag"), scale_arg(args))
                 .map_err(|e| format!("{e:#}"))?;
             Ok(ToolOutput::text(format!("wrote {}", target_path.display())))
         }
         "export_sheet" => {
-            let target_path = path(args, "path")?;
+            let target_path = export_path(args, "png")?;
             let layout = match string(args, "layout").unwrap_or("grid") {
                 "horizontal" => SheetLayout::Horizontal,
                 "vertical" => SheetLayout::Vertical,
@@ -529,7 +536,7 @@ pub fn call(studio: &mut Studio, name: &str, args: &Value) -> ToolResult {
             };
             let options = SheetOptions {
                 layout,
-                padding: integer(args, "padding").unwrap_or(0).max(0) as u32,
+                padding: integer(args, "padding").unwrap_or(0).clamp(0, 64) as u32,
                 trim: args.get("trim").and_then(Value::as_bool).unwrap_or(false),
                 merge_duplicates: args.get("merge_duplicates").and_then(Value::as_bool).unwrap_or(false),
                 tag: string(args, "tag").map(str::to_string),

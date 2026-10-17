@@ -95,9 +95,14 @@ struct Cutout {
     source_rect: Rect,
 }
 
+pub const MAX_PADDING: u32 = 64;
+
 pub fn build(sprite: &Sprite, title: &str, options: &SheetOptions) -> Result<SpriteSheet, String> {
     let scale = options.scale.max(1);
     limits::check_export_size(sprite.width, sprite.height, scale)?;
+    if options.padding > MAX_PADDING {
+        return Err(format!("padding goes up to {MAX_PADDING} pixels, not {}", options.padding));
+    }
     let frames = frames_to_export(sprite, options.tag.as_deref())?;
 
     let mut cutouts: Vec<Cutout> = Vec::new();

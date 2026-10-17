@@ -205,3 +205,16 @@ fn the_http_bridge_serves_the_same_tools_to_the_running_app() {
     let studio = app.join().unwrap();
     assert_eq!(studio.editor.sprite().composite(0).get(7, 7), BLUE, "the app's document changed");
 }
+
+#[test]
+fn exports_over_mcp_only_ever_write_image_files() {
+    let folder = tempfile::tempdir().unwrap();
+    let script = folder.path().join("deploy.sh");
+    std::fs::write(&script, "echo keep me").unwrap();
+    let mut session = McpSession::launch(&[]);
+    session.request("initialize", json!({}));
+    let result = session.call("export_png", json!({ "path": script.to_str().unwrap() }));
+    assert_eq!(result["isError"], false, "{result}");
+    assert_eq!(std::fs::read_to_string(&script).unwrap(), "echo keep me");
+    assert!(folder.path().join("deploy.png").exists());
+}
