@@ -1,7 +1,7 @@
 //! Feature 13: automatic sprite sheets.
 
 use crate::support::*;
-use spry::editor::{Command, PixelValue};
+use spry::editor::{Brush, Command, Ink, PixelValue};
 use spry::io::{self, SheetLayout, SheetOptions};
 
 /// Four 8×8 frames where frames 2 and 4 (indices 1 and 3) are identical.
@@ -89,4 +89,29 @@ fn a_sheet_slices_back_into_the_same_animation() {
     for frame in 0..4 {
         assert_eq!(document.sprite.composite(frame), scenario.sprite().composite(frame));
     }
+}
+
+#[test]
+fn importing_a_sheet_file_finds_its_cells_from_the_gutters() {
+    let mut scenario = given_a_blank_sprite(8, 8);
+    for (frame, colour) in [RED, GREEN, BLUE].into_iter().enumerate() {
+        if frame > 0 {
+            scenario.when(Command::AddFrame);
+        }
+        scenario.when(Command::DrawRect {
+            from: (1, 1),
+            to: (6, 6),
+            ink: Ink::colour(colour),
+            filled: true,
+            brush: Brush::default(),
+        });
+    }
+    let path = scenario.path("walk.png");
+    let options = SheetOptions { layout: SheetLayout::Horizontal, ..SheetOptions::default() };
+    io::export_sheet(&path, scenario.sprite(), "walk", &options).unwrap();
+
+    let (document, cell) = io::import_sheet(&path, (16, 16)).unwrap();
+    assert_eq!(cell, (8, 8), "the transparent border around each frame gives the grid away");
+    assert_eq!(document.sprite.frame_count(), 3);
+    assert_eq!(document.sprite.composite(2).get(3, 3), BLUE);
 }

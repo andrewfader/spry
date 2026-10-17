@@ -41,12 +41,16 @@ fn extracting_a_palette_collects_the_colours_in_use() {
 fn palette_files_load_and_save_in_hex_and_gpl() {
     let scenario = given_a_blank_sprite(4, 4);
     let palette = Palette::db16();
-    for (name, text) in [("db.hex", palette.to_hex_file()), ("db.gpl", palette.to_gpl_file())] {
+    for name in ["db.hex", "db.gpl"] {
         let path = scenario.path(name);
-        std::fs::write(&path, text).unwrap();
-        let loaded = Palette::parse("DawnBringer 16", &std::fs::read_to_string(&path).unwrap()).unwrap();
-        assert_eq!(loaded, palette, "{name}");
+        spry::io::save_palette(&path, &palette).unwrap();
+        let loaded = spry::io::load_palette(&path).unwrap();
+        assert_eq!(loaded.colours, palette.colours, "{name}");
+        assert_eq!(loaded.name, "db", "a palette is named after its file");
     }
+    let gpl = std::fs::read_to_string(scenario.path("db.gpl")).unwrap();
+    assert!(gpl.starts_with("GIMP Palette"), "a .gpl path gets GIMP's format");
+    assert!(spry::io::load_palette(&scenario.path("missing.hex")).is_err());
 }
 
 #[test]

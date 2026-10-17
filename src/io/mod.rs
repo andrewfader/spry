@@ -6,7 +6,7 @@ pub mod raster_formats;
 pub mod sheet;
 pub mod spry_file;
 
-use crate::editor::{limits, Document, Pixels, Sprite};
+use crate::editor::{limits, Document, Palette, Pixels, Sprite};
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
@@ -62,6 +62,30 @@ pub fn document_from_animation(frames: Vec<(Pixels, u32)>) -> Result<Document> {
         *sprite.cel_image_mut(0, index) = image;
     }
     Ok(Document::new(sprite))
+}
+
+/// Reads a `.hex` or `.gpl` palette, named after its file.
+pub fn load_palette(path: &Path) -> Result<Palette> {
+    let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("Palette").to_string();
+    let text = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    Palette::parse(&name, &text).map_err(anyhow::Error::msg)
+}
+
+/// Writes a palette as GIMP `.gpl` when the path says so, otherwise as a
+/// Lospec-style `.hex` list.
+pub fn save_palette(path: &Path, palette: &Palette) -> Result<()> {
+    let text = if extension_of(path) == "gpl" { palette.to_gpl_file() } else { palette.to_hex_file() };
+    std::fs::write(path, text).with_context(|| format!("writing {}", path.display()))
+}
+
+/// Opens a sprite sheet image as an animation, finding the cell size from
+/// the transparent gutters between frames, or using `fallback_cell` when
+/// there are none. Returns the document and the cell size it used.
+pub fn import_sheet(path: &Path, fallback_cell: (u32, u32)) -> Result<(Document, (u32, u32))> {
+    let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+    let sheet = decode_image(&bytes)?;
+    let cell = sheet::detect_grid(&sheet).unwrap_or(fallback_cell);
+    Ok((document_from_sheet(&sheet, cell.0, cell.1)?, cell))
 }
 
 /// A sprite sheet cut into frames becomes a one-layer animation.

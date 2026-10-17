@@ -13,7 +13,7 @@ use super::theme::{self, Appearance};
 use super::tools::{Tool, ToolSettings};
 use super::workers::{AgentWorker, DiffusionJob};
 use crate::editor::playback;
-use crate::editor::{Command, Palette};
+use crate::editor::Command;
 use crate::io::{self, SheetOptions};
 use crate::mcp::http::HttpBridge;
 use crate::mcp::Workspace;
@@ -536,45 +536,23 @@ impl App {
                 io::export_png_sequence(&path, &title, &sprite, scale)
                     .map(|files| format!("Exported {} frames into {}", files.len(), path.display())),
             ),
-            Purpose::ImportSheet => {
-                let imported = std::fs::read(&path)
-                    .map_err(anyhow::Error::from)
-                    .and_then(|bytes| io::decode_image(&bytes))
-                    .and_then(|sheet| {
-                        let (w, h) = crate::io::sheet::detect_grid(&sheet).unwrap_or(self.sheet_cell);
-                        io::document_from_sheet(&sheet, w, h).map(|doc| (doc, w, h))
-                    });
-                match imported {
-                    Ok((document, w, h)) => {
-                        let frames = document.sprite.frame_count();
-                        self.add_document(Studio::from_document(document));
-                        format!("Imported {frames} frames of {w}×{h} from {}", path.display())
-                    }
-                    Err(error) => format!("Couldn't import the sheet: {error:#}"),
+            Purpose::ImportSheet => match io::import_sheet(&path, self.sheet_cell) {
+                Ok((document, (w, h))) => {
+                    let frames = document.sprite.frame_count();
+                    self.add_document(Studio::from_document(document));
+                    format!("Imported {frames} frames of {w}×{h} from {}", path.display())
                 }
-            }
-            Purpose::LoadPalette => {
-                let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("Palette").to_string();
-                match std::fs::read_to_string(&path)
-                    .map_err(|e| e.to_string())
-                    .and_then(|text| Palette::parse(&name, &text))
-                {
-                    Ok(palette) => {
-                        self.edit(Command::SetPalette { palette });
-                        return;
-                    }
-                    Err(error) => format!("Couldn't load the palette: {error}"),
+                Err(error) => format!("Couldn't import the sheet: {error:#}"),
+            },
+            Purpose::LoadPalette => match io::load_palette(&path) {
+                Ok(palette) => {
+                    self.edit(Command::SetPalette { palette });
+                    return;
                 }
-            }
+                Err(error) => format!("Couldn't load the palette: {error:#}"),
+            },
             Purpose::SavePalette => {
-                let palette = &sprite.palette;
-                let is_gpl = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("gpl"));
-                let text = if is_gpl { palette.to_gpl_file() } else { palette.to_hex_file() };
-                report(
-                    std::fs::write(&path, text)
-                        .map(|_| format!("Saved palette to {}", path.display()))
-                        .map_err(Into::into),
-                )
+                report(io::save_palette(&path, &sprite.palette).map(|_| format!("Saved palette to {}", path.display())))
             }
         };
     }
