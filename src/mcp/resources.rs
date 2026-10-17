@@ -60,3 +60,60 @@ pub fn read(studio: &Studio, uri: &str) -> Result<Value, String> {
 fn frame_uri(frame: usize) -> String {
     format!("{FRAME_PREFIX}{frame}.png")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::editor::{Command, Ink, Rgba};
+
+    fn red_studio() -> Studio {
+        let mut studio = Studio::new(4, 2);
+        studio
+            .editor
+            .execute(Command::Fill { at: (0, 0), ink: Ink::colour(Rgba::rgb(255, 0, 0)), contiguous: true })
+            .unwrap();
+        studio
+    }
+
+    #[test]
+    fn the_document_and_each_frame_are_listed() {
+        let mut studio = red_studio();
+        studio.editor.execute(Command::AddFrame).unwrap();
+        let uris: Vec<String> = list(&studio)["resources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["uri"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(uris, vec!["spry://document", "spry://frames/0.png", "spry://frames/1.png"]);
+    }
+
+    #[test]
+    fn a_frame_reads_back_as_its_exact_pixels() {
+        let studio = red_studio();
+        let read = read(&studio, "spry://frames/0.png").unwrap();
+        let blob = read["contents"][0]["blob"].as_str().unwrap();
+        let png = base64::engine::general_purpose::STANDARD.decode(blob).unwrap();
+        assert_eq!(io::decode_image(&png).unwrap(), studio.editor.sprite().composite(0));
+    }
+
+    #[test]
+    fn the_document_reads_as_its_summary() {
+        let studio = red_studio();
+        let text = read(&studio, DOCUMENT_URI).unwrap()["contents"][0]["text"].as_str().unwrap().to_string();
+        assert!(text.contains("4×2"), "{text}");
+    }
+
+    #[test]
+    fn unknown_and_missing_resources_say_what_exists() {
+        let studio = red_studio();
+        assert!(read(&studio, "spry://frames/3.png").unwrap_err().contains("frames run from 0 to 0"));
+        assert!(read(&studio, "spry://elsewhere").unwrap_err().contains("no resource"));
+        assert!(read(&studio, "spry://frames/x.png").is_err());
+    }
+
+    #[test]
+    fn frames_are_offered_as_a_template() {
+        assert_eq!(templates()["resourceTemplates"][0]["uriTemplate"], "spry://frames/{frame}.png");
+    }
+}

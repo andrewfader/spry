@@ -293,6 +293,54 @@ mod tests {
         assert!(luminosity(unit_rgb(bright)) > luminosity(unit_rgb(red)));
     }
 
+    /// Worked by hand from the spec's formulas, for a 40% grey backdrop
+    /// (102) under an 80% grey source (204).
+    #[test]
+    fn every_separable_mode_matches_the_spec_on_known_values() {
+        let (backdrop, source) = (Rgba::rgb(102, 102, 102), Rgba::rgb(204, 204, 204));
+        for (mode, expected) in [
+            (BlendMode::Overlay, 163),    // hard light with the roles swapped: 2·0.8·0.4
+            (BlendMode::Darken, 102),     // min
+            (BlendMode::Lighten, 204),    // max
+            (BlendMode::ColorDodge, 255), // 0.4 / (1 − 0.8), clamped
+            (BlendMode::ColorBurn, 64),   // 1 − (0.6 / 0.8)
+            (BlendMode::HardLight, 194),  // screen(0.4, 0.6)
+            (BlendMode::SoftLight, 138),  // 0.4 + 0.6·(√0.4 − 0.4)
+            (BlendMode::Exclusion, 143),  // 0.4 + 0.8 − 2·0.32
+            (BlendMode::Divide, 128),     // 0.4 / 0.8
+        ] {
+            assert_eq!(blend_over(source, backdrop, 255, mode), Rgba::rgb(expected, expected, expected), "{mode:?}");
+        }
+    }
+
+    #[test]
+    fn colour_mode_paints_the_source_hue_at_the_backdrop_brightness() {
+        let tinted = blend_over(Rgba::rgb(255, 0, 0), Rgba::rgb(128, 128, 128), 255, BlendMode::Color);
+        assert_eq!(tinted.r(), 255);
+        assert!(tinted.g() == tinted.b() && tinted.g() < 128, "a red, as bright as the grey: {tinted}");
+    }
+
+    #[test]
+    fn a_grey_backdrop_has_no_hue_or_saturation_to_give() {
+        let grey = Rgba::rgb(128, 128, 128);
+        let red = Rgba::rgb(255, 0, 0);
+        let hue = blend_over(red, grey, 255, BlendMode::Hue);
+        assert!(hue.r() == hue.g() && hue.g() == hue.b(), "hue over grey stays grey: {hue}");
+        let desaturated = blend_over(grey, Rgba::rgb(200, 40, 40), 255, BlendMode::Saturation);
+        assert!(desaturated.r() == desaturated.g() && desaturated.g() == desaturated.b(), "{desaturated}");
+    }
+
+    #[test]
+    fn dividing_by_black_saturates_instead_of_failing() {
+        assert_eq!(blend_over(Rgba::BLACK, Rgba::rgb(10, 10, 10), 255, BlendMode::Divide), Rgba::WHITE);
+    }
+
+    #[test]
+    fn every_mode_has_a_name_for_the_menu() {
+        assert!(BlendMode::ALL.iter().all(|mode| !mode.name().is_empty()));
+        assert_eq!(BlendMode::ColorDodge.name(), "Color dodge");
+    }
+
     #[test]
     fn aseprite_blend_numbers_map_in_order() {
         assert_eq!(BlendMode::from_aseprite(1), Some(BlendMode::Multiply));
