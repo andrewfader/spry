@@ -409,15 +409,11 @@ impl Editor {
                 self.draw(&path, ink, brush, "painted")
             }
             Command::SetPixels { pixels } => self.set_pixels(&pixels),
-            Command::DrawLine { from, to, ink, brush } => self.draw(&raster::line(from, to), ink, brush, "drew a line"),
-            Command::DrawRect { from, to, ink, filled, brush } => {
-                let points =
-                    if filled { raster::rectangle_filled(from, to) } else { raster::rectangle_outline(from, to) };
-                self.draw(&points, ink, brush, "drew a rectangle")
-            }
-            Command::DrawEllipse { from, to, ink, filled, brush } => {
-                let points = if filled { raster::ellipse_filled(from, to) } else { raster::ellipse_outline(from, to) };
-                self.draw(&points, ink, brush, "drew an ellipse")
+            Command::DrawLine { ink, brush, .. }
+            | Command::DrawRect { ink, brush, .. }
+            | Command::DrawEllipse { ink, brush, .. } => {
+                let (path, summary) = shape_path(&command).expect("these commands are shapes");
+                self.draw(&path, ink, brush, summary)
             }
             Command::Fill { at, ink, contiguous } => self.fill(at, ink, contiguous),
             Command::GradientFill { from, to, primary, secondary } => self.gradient_fill(from, to, primary, secondary),
@@ -827,6 +823,26 @@ impl Editor {
         raster::deduplicated(points)
     }
 
+    /// What a line, rectangle or ellipse command would paint on the
+    /// current cel, without painting it: each pixel it would change, with
+    /// its new colour. Shape tools preview with this, so the preview runs
+    /// the same code as the result and can never disagree with it, whether
+    /// the ink is a pattern, shade or clone, or there's a selection.
+    pub fn preview(&self, command: &Command) -> Vec<(Point, Rgba)> {
+        let (Some((path, _)), Some((ink, brush))) = (shape_path(command), shape_ink(command)) else {
+            return Vec::new();
+        };
+        let points = raster::deduplicated(self.footprint(&path, brush));
+        let before = self.current_image_or_blank();
+        let mut after = before.clone();
+        self.paint_points(&mut after, &before, &points, ink);
+        points
+            .into_iter()
+            .filter(|&(x, y)| after.get(x, y) != before.get(x, y))
+            .map(|p| (p, after.get(p.0, p.1)))
+            .collect()
+    }
+
     fn draw(&mut self, path: &[Point], ink: Ink, brush: Brush, summary: &str) -> EditResult {
         self.ensure_drawable()?;
         let points = self.footprint(path, brush);
@@ -1089,9 +1105,55 @@ impl Editor {
     }
 }
 
+/// The path a shape command traces, and how to describe it.
+fn shape_path(command: &Command) -> Option<(Vec<Point>, &'static str)> {
+    match *command {
+        Command::DrawLine { from, to, .. } => Some((raster::line(from, to), "drew a line")),
+        Command::DrawRect { from, to, filled: true, .. } => {
+            Some((raster::rectangle_filled(from, to), "drew a rectangle"))
+        }
+        Command::DrawRect { from, to, .. } => Some((raster::rectangle_outline(from, to), "drew a rectangle")),
+        Command::DrawEllipse { from, to, filled: true, .. } => {
+            Some((raster::ellipse_filled(from, to), "drew an ellipse"))
+        }
+        Command::DrawEllipse { from, to, .. } => Some((raster::ellipse_outline(from, to), "drew an ellipse")),
+        _ => None,
+    }
+}
+
+fn shape_ink(command: &Command) -> Option<(Ink, Brush)> {
+    match *command {
+        Command::DrawLine { ink, brush, .. }
+        | Command::DrawRect { ink, brush, .. }
+        | Command::DrawEllipse { ink, brush, .. } => Some((ink, brush)),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_shape_preview_shows_exactly_what_the_command_paints() {
+        let mut editor = editor();
+        editor.execute(Command::SelectRect { rect: Rect::new(0, 0, 4, 8), add: false }).unwrap();
+        let ink = Ink::Pattern { pattern: crate::editor::Pattern::Checker, primary: RED, secondary: None };
+        let rect = Command::DrawRect { from: (1, 1), to: (6, 6), ink, filled: true, brush: Brush::default() };
+        let mut previewed = editor.preview(&rect);
+        editor.execute(rect).unwrap();
+        let image = editor.sprite().cel_image(0, 0).unwrap();
+        let mut painted: Vec<(Point, Rgba)> = image
+            .bounds()
+            .points()
+            .filter(|&(x, y)| !image.get(x, y).is_transparent())
+            .map(|p| (p, image.get(p.0, p.1)))
+            .collect();
+        previewed.sort_by_key(|(p, _)| *p);
+        painted.sort_by_key(|(p, _)| *p);
+        assert!(!painted.is_empty());
+        assert_eq!(previewed, painted, "clipped to the selection and patterned, just like the real thing");
+    }
 
     const RED: Rgba = Rgba::rgb(255, 0, 0);
 

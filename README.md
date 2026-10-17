@@ -24,7 +24,7 @@ macOS and Windows need nothing extra.
 
 ## What's in it
 
-**Drawing.** Pencil with pixel-perfect strokes, eraser, line, rectangle,
+**Drawing.** Pencil with pixel-perfect strokes (for 1-pixel brushes, where corners matter), eraser, line, rectangle,
 ellipse (outlined or filled, Shift for squares and circles), bucket fill
 (contiguous or global), spray, eyedropper (or Alt-click), colour replace,
 brush sizes (square or round), and left↔right / top↕bottom mirror symmetry.

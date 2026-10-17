@@ -103,9 +103,9 @@ file.
   why.
 
 ### 3. MS Paint-style dithers (`dithering.rs`)
-- Pattern library: the 8 classic Paint pattern fills (checker, 25%, 75%,
-  horizontal, vertical, diagonal, cross-hatch, bricks), plus Bayer 2×2/4×4/8×8
-  levels 0–64.
+- Pattern library: the classic Paint pattern fills (solid, checker, 25%,
+  75%, dots, horizontal, vertical, both diagonals, cross-hatch, bricks: 11 in
+  all), plus Bayer 2×2/4×4/8×8 levels 0–64.
 - Given the checker pattern with primary black and secondary transparent,
   when I fill a 4×4 rectangle, then pixels where (x+y) is even are black and
   the rest are untouched.

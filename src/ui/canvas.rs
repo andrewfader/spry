@@ -9,7 +9,7 @@
 use super::textures::TextureCache;
 use super::theme::{self, Appearance};
 use super::tools::{Tool, ToolSettings};
-use crate::editor::raster::{self, Point};
+use crate::editor::raster::Point;
 use crate::editor::{Command, Rect, StrokeKind};
 use crate::studio::Studio;
 use egui::{Color32, Pos2, Sense, Stroke, Vec2};
@@ -344,10 +344,10 @@ fn finish_gesture(
     requests: &mut Vec<CanvasRequest>,
 ) {
     let Gesture { tool, start, current: end, secondary } = gesture;
-    let ink = ink_for(settings, secondary);
-    let brush = settings.brush;
-    let constrained_end =
-        if shift && matches!(tool, Tool::Rectangle | Tool::Ellipse) { square_up(start, end) } else { end };
+    if let Some(shape) = shape_command(&gesture, settings, shift) {
+        report(requests, editor.execute(shape));
+        return;
+    }
     let outcome = match tool {
         stroke if stroke.is_stroke() => {
             editor.finish_stroke();
@@ -357,17 +357,6 @@ fn finish_gesture(
             editor.end_undo_group();
             return;
         }
-        Tool::Line => editor.execute(Command::DrawLine { from: start, to: end, ink, brush }),
-        Tool::Rectangle => {
-            editor.execute(Command::DrawRect { from: start, to: constrained_end, ink, filled: settings.filled, brush })
-        }
-        Tool::Ellipse => editor.execute(Command::DrawEllipse {
-            from: start,
-            to: constrained_end,
-            ink,
-            filled: settings.filled,
-            brush,
-        }),
         Tool::Gradient => {
             let (primary, secondary_colour) =
                 if secondary { (settings.secondary, settings.primary) } else { (settings.primary, settings.secondary) };
@@ -397,6 +386,21 @@ fn ink_for(settings: &ToolSettings, secondary: bool) -> crate::editor::Ink {
 }
 
 /// Shift-drag makes squares and circles.
+/// The command a line, rectangle or ellipse drag stands for. Both the live
+/// preview and the release use it, so what you see is what you get. Shift
+/// makes rectangles square and ellipses round.
+fn shape_command(gesture: &Gesture, settings: &ToolSettings, shift: bool) -> Option<Command> {
+    let (from, ink, brush, filled) =
+        (gesture.start, ink_for(settings, gesture.secondary), settings.brush, settings.filled);
+    let squared = if shift { square_up(gesture.start, gesture.current) } else { gesture.current };
+    match gesture.tool {
+        Tool::Line => Some(Command::DrawLine { from, to: gesture.current, ink, brush }),
+        Tool::Rectangle => Some(Command::DrawRect { from, to: squared, ink, filled, brush }),
+        Tool::Ellipse => Some(Command::DrawEllipse { from, to: squared, ink, filled, brush }),
+        _ => None,
+    }
+}
+
 fn square_up(start: Point, end: Point) -> Point {
     let side = (end.0 - start.0).abs().max((end.1 - start.1).abs());
     (start.0 + side * (end.0 - start.0).signum(), start.1 + side * (end.1 - start.1).signum())
@@ -444,36 +448,30 @@ fn paint_overlays(
         );
     }
 
-    // Shape previews: exactly the pixels the command will paint.
+    // Shape previews: exactly the pixels the command will paint, in the
+    // colours it will paint them.
     if let Some(gesture) = &view.gesture {
-        let ghost = if gesture.secondary { settings.secondary } else { settings.primary };
-        let ghost = Color32::from_rgba_unmultiplied(ghost.r(), ghost.g(), ghost.b(), 200);
+        let shift = ui.input(|i| i.modifiers.shift);
+        if let Some(shape) = shape_command(gesture, settings, shift) {
+            for (point, colour) in editor.preview(&shape) {
+                let ghost = Color32::from_rgba_unmultiplied(colour.r(), colour.g(), colour.b(), colour.a().min(220));
+                painter.rect_filled(pixel_rect(point), 0.0, ghost);
+            }
+        }
         let end = gesture.current;
-        let points = match gesture.tool {
-            Tool::Line => Some(raster::line(gesture.start, end)),
-            Tool::Rectangle if settings.filled => Some(raster::rectangle_filled(gesture.start, end)),
-            Tool::Rectangle => Some(raster::rectangle_outline(gesture.start, end)),
-            Tool::Ellipse if settings.filled => Some(raster::ellipse_filled(gesture.start, end)),
-            Tool::Ellipse => Some(raster::ellipse_outline(gesture.start, end)),
+        match gesture.tool {
             Tool::Gradient => {
                 painter.line_segment(
                     [to_screen(gesture.start) + Vec2::splat(zoom / 2.0), to_screen(end) + Vec2::splat(zoom / 2.0)],
                     Stroke::new(2.0_f32, colours.accent),
                 );
-                None
             }
             Tool::Select => {
                 let r = Rect::spanning(gesture.start, end);
                 let rect = egui::Rect::from_min_max(to_screen((r.x, r.y)), to_screen((r.right(), r.bottom())));
                 painter.rect_stroke(rect, 0.0, Stroke::new(1.0_f32, Color32::WHITE), egui::StrokeKind::Middle);
-                None
             }
-            _ => None,
-        };
-        if let Some(points) = points {
-            for point in editor.footprint(&points, settings.brush) {
-                painter.rect_filled(pixel_rect(point), 0.0, ghost);
-            }
+            _ => {}
         }
     }
 
