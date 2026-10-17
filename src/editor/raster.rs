@@ -219,14 +219,21 @@ pub fn round_brush(centre: Point, size: u32) -> Vec<Point> {
 /// A spray-can burst: `count` points scattered evenly over a disc. It's
 /// seeded so the same stroke always gives the same speckle, which keeps
 /// undo/redo and tests deterministic.
+///
+/// It picks whole-pixel offsets and keeps those inside the disc. Picking a
+/// point in the true circle and rounding x and y separately would let
+/// dots land past the edge.
 pub fn spray(centre: Point, radius: u32, count: u32, seed: u64) -> Vec<Point> {
     let mut rng = fastrand::Rng::with_seed(seed);
-    let radius = radius.max(1) as f32;
+    let radius = radius.max(1) as i32;
+    let inside = |dx: i32, dy: i32| dx * dx + dy * dy <= radius * radius;
     (0..count)
-        .map(move |_| {
-            let angle = rng.f32() * std::f32::consts::TAU;
-            let distance = rng.f32().sqrt() * radius;
-            (centre.0 + (angle.cos() * distance).round() as i32, centre.1 + (angle.sin() * distance).round() as i32)
+        .map(move |_| loop {
+            let (dx, dy) = (rng.i32(-radius..=radius), rng.i32(-radius..=radius));
+            // The disc covers over 3/4 of its square, so this rarely loops.
+            if inside(dx, dy) {
+                break (centre.0 + dx, centre.1 + dy);
+            }
         })
         .collect()
 }
