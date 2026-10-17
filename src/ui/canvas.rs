@@ -28,6 +28,8 @@ pub struct CanvasView {
     pub tiled: bool,
     fitted: bool,
     gesture: Option<Gesture>,
+    /// The outline traced so far by the lasso.
+    lasso: Vec<Point>,
     /// The pixel under the pointer, for the status bar.
     pub hovered: Option<Point>,
 }
@@ -45,6 +47,7 @@ impl Default for CanvasView {
             tiled: false,
             fitted: false,
             gesture: None,
+            lasso: Vec::new(),
             hovered: None,
         }
     }
@@ -320,6 +323,10 @@ fn handle_tool(
                     Err(error) => requests.push(CanvasRequest::Status(error.to_string())),
                 }
             }
+            Tool::Lasso => {
+                view.lasso = vec![at];
+                view.gesture = Some(Gesture { tool, start: at, current: at, secondary });
+            }
             _ => view.gesture = Some(Gesture { tool, start: at, current: at, secondary }),
         }
         return;
@@ -333,13 +340,22 @@ fn handle_tool(
             } else if gesture.tool == Tool::Move {
                 let (dx, dy) = (at.0 - gesture.current.0, at.1 - gesture.current.1);
                 report(requests, editor.execute(Command::MoveFloating { dx, dy }));
+            } else if gesture.tool == Tool::Lasso {
+                view.lasso.push(at);
             }
             gesture.current = at;
         }
     }
     if !down {
         let gesture = view.gesture.take().expect("checked above");
-        finish_gesture(editor, settings, gesture, shift, requests);
+        let outline = std::mem::take(&mut view.lasso);
+        match gesture.tool {
+            // A click without a drag clears the selection, as with the
+            // rectangle.
+            Tool::Lasso if outline.len() < 3 && !shift => report(requests, editor.execute(Command::SelectNone)),
+            Tool::Lasso => report(requests, editor.execute(Command::SelectLasso { points: outline, add: shift })),
+            _ => finish_gesture(editor, settings, gesture, shift, requests),
+        }
     }
 }
 
@@ -472,6 +488,11 @@ fn paint_overlays(
                     [to_screen(gesture.start) + Vec2::splat(zoom / 2.0), to_screen(end) + Vec2::splat(zoom / 2.0)],
                     Stroke::new(2.0_f32, colours.accent),
                 );
+            }
+            Tool::Lasso => {
+                let centre = Vec2::splat(zoom / 2.0);
+                let trail: Vec<Pos2> = view.lasso.iter().map(|&p| to_screen(p) + centre).collect();
+                painter.add(egui::Shape::line(trail, Stroke::new(1.5_f32, Color32::WHITE)));
             }
             Tool::Select => {
                 let r = Rect::spanning(gesture.start, end);

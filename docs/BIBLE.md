@@ -117,8 +117,9 @@ file.
   primary→secondary ordered-dither gradient.
 
 ### 4. Selection & clipboard (`selection.rs`)
-- Rectangle select, magic wand (contiguous colour), select all / none /
-  invert.
+- Rectangle select, lasso (freehand, even-odd fill plus the traced
+  outline; Q), magic wand (contiguous colour), select all / none / invert,
+  Shift to add.
 - Cut, copy and paste into a floating selection that you move with the mouse
   or arrow keys, then stamp down.
 - Flip H/V, rotate 90°, nudge 1 px, and outline the selection with the primary

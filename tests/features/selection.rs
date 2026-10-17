@@ -101,3 +101,15 @@ fn moving_away_from_floating_pixels_lands_them_on_their_own_layer() {
     assert_eq!(scenario.cel_pixel(0, 0, 3, 0), RED);
     assert_eq!(scenario.cel_pixel(1, 0, 3, 0), CLEAR);
 }
+
+#[test]
+fn a_lasso_selects_a_freehand_shape_and_painting_stays_inside_it() {
+    let mut scenario = given_a_blank_sprite(8, 8);
+    scenario.when(Command::SelectLasso { points: vec![(0, 0), (6, 0), (0, 6)], add: false });
+    scenario.when(Command::Fill { at: (1, 1), ink: Ink::colour(RED), contiguous: false });
+    assert_eq!(scenario.pixel(1, 1), RED);
+    assert_eq!(scenario.pixel(6, 6), CLEAR, "past the lasso's diagonal stays untouched");
+    scenario.when(Command::SelectLasso { points: vec![(7, 7), (7, 5), (5, 7)], add: true });
+    assert!(scenario.studio.editor.selection.as_ref().unwrap().contains(7, 7), "Shift adds to the selection");
+    assert!(scenario.studio.editor.selection.as_ref().unwrap().contains(1, 1));
+}

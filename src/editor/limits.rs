@@ -79,6 +79,7 @@ pub fn check(command: &Command, canvas_width: u32, canvas_height: u32) -> Result
         }
         Command::MoveFloating { dx, dy } | Command::DropShadow { dx, dy, .. } => check_offset(*dx, *dy),
         Command::Paste { at: Some(at) } => reach.check(*at),
+        Command::SelectLasso { points, .. } => points.iter().try_for_each(|&point| reach.check(point)),
         Command::ImportLayer { image, .. } => check_canvas_size(image.width(), image.height()),
         Command::ResizeCanvas { width, height, offset_x, offset_y } => {
             check_canvas_size(*width, *height)?;

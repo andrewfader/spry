@@ -18,13 +18,14 @@ pub enum Tool {
     Gradient,
     Eyedropper,
     Select,
+    Lasso,
     Wand,
     Move,
     Pin,
 }
 
 impl Tool {
-    pub const ALL: [Tool; 16] = [
+    pub const ALL: [Tool; 17] = [
         Tool::Pencil,
         Tool::Eraser,
         Tool::Dither,
@@ -38,6 +39,7 @@ impl Tool {
         Tool::Gradient,
         Tool::Eyedropper,
         Tool::Select,
+        Tool::Lasso,
         Tool::Wand,
         Tool::Move,
         Tool::Pin,
@@ -58,6 +60,7 @@ impl Tool {
             Tool::Gradient => "▤",
             Tool::Eyedropper => "💉",
             Tool::Select => "⬚",
+            Tool::Lasso => "➰",
             Tool::Wand => "✨",
             Tool::Move => "✥",
             Tool::Pin => "📌",
@@ -79,6 +82,7 @@ impl Tool {
             Tool::Gradient => "Dither gradient",
             Tool::Eyedropper => "Eyedropper",
             Tool::Select => "Rectangle select",
+            Tool::Lasso => "Lasso select",
             Tool::Wand => "Magic wand",
             Tool::Move => "Move selection",
             Tool::Pin => "Pin a note",
@@ -101,6 +105,7 @@ impl Tool {
             Tool::Fill => Key::G,
             Tool::Eyedropper => Key::I,
             Tool::Select => Key::M,
+            Tool::Lasso => Key::Q,
             Tool::Wand => Key::W,
             Tool::Move => Key::V,
             Tool::Gradient | Tool::Pin => return None,

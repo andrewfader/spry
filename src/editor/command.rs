@@ -175,6 +175,13 @@ pub enum Command {
         #[serde(default)]
         add: bool,
     },
+    /// A freehand lasso; `points` is the outline in order, closed
+    /// automatically.
+    SelectLasso {
+        points: Vec<Point>,
+        #[serde(default)]
+        add: bool,
+    },
     SelectAll,
     SelectNone,
     InvertSelection,

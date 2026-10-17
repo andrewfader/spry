@@ -444,6 +444,10 @@ impl Editor {
                 let picked = Selection::from_rect(self.sprite().width, self.sprite().height, rect);
                 self.select(picked, add)
             }
+            Command::SelectLasso { points, add } => {
+                let picked = Selection::from_polygon(self.sprite().width, self.sprite().height, &points);
+                self.select(picked, add)
+            }
             Command::SelectWand { at, contiguous, add } => {
                 let image = self.current_image_or_blank();
                 let points = if contiguous {

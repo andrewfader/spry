@@ -37,6 +37,27 @@ impl Selection {
         selection
     }
 
+    /// A freehand lasso: the pixels whose centres fall inside the closed
+    /// outline (even-odd rule, so a figure-eight leaves its crossing out),
+    /// plus the pixels the outline itself runs through, so a thin stroke
+    /// still selects what it traced.
+    pub fn from_polygon(width: u32, height: u32, outline: &[Point]) -> Selection {
+        let mut selection = Selection::empty(width, height);
+        let Some(&first) = outline.first() else { return selection };
+        let mut closed = outline.to_vec();
+        closed.push(first);
+        for point in super::raster::connect(&closed) {
+            selection.set(point.0, point.1, true);
+        }
+        let (low_y, high_y) = outline.iter().fold((i32::MAX, i32::MIN), |(lo, hi), p| (lo.min(p.1), hi.max(p.1)));
+        for y in low_y.max(0)..=high_y.min(height as i32 - 1) {
+            for x in crossings_inside(&closed, y as f32 + 0.5, width) {
+                selection.set(x, y, true);
+            }
+        }
+        selection
+    }
+
     fn index(&self, x: i32, y: i32) -> Option<usize> {
         (x >= 0 && y >= 0 && (x as u32) < self.width && (y as u32) < self.height)
             .then(|| (y as u32 * self.width + x as u32) as usize)
@@ -130,8 +151,56 @@ impl Floating {
     }
 }
 
+/// The pixel columns on row `centre_y` whose centres are inside a closed
+/// outline: sort where the edges cross the row, then fill between pairs.
+fn crossings_inside(closed: &[Point], centre_y: f32, width: u32) -> Vec<i32> {
+    let mut crossings: Vec<f32> = closed
+        .windows(2)
+        .filter_map(|edge| {
+            let ((x0, y0), (x1, y1)) =
+                ((edge[0].0 as f32 + 0.5, edge[0].1 as f32 + 0.5), (edge[1].0 as f32 + 0.5, edge[1].1 as f32 + 0.5));
+            let spans_row = (y0 <= centre_y && centre_y < y1) || (y1 <= centre_y && centre_y < y0);
+            spans_row.then(|| x0 + (centre_y - y0) / (y1 - y0) * (x1 - x0))
+        })
+        .collect();
+    crossings.sort_by(f32::total_cmp);
+    crossings
+        .chunks_exact(2)
+        .flat_map(|pair| {
+            let from = (pair[0] - 0.5).ceil().max(0.0) as i32;
+            let to = ((pair[1] - 0.5).floor() as i32).min(width as i32 - 1);
+            from..=to
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_lasso_selects_the_inside_of_its_outline() {
+        // A triangle with its corner at the top left.
+        let lasso = super::Selection::from_polygon(10, 10, &[(0, 0), (8, 0), (0, 8)]);
+        assert!(lasso.contains(1, 1), "inside");
+        assert!(lasso.contains(4, 0) && lasso.contains(0, 4), "on the outline");
+        assert!(!lasso.contains(7, 7), "past the diagonal");
+        assert!(!lasso.contains(9, 9));
+    }
+
+    #[test]
+    fn an_hourglass_lasso_selects_its_two_lobes_and_not_the_gaps() {
+        // Edges cross in the middle: lobes to the left and right, open
+        // wedges above and below.
+        let lasso = super::Selection::from_polygon(10, 10, &[(0, 0), (9, 9), (9, 0), (0, 9)]);
+        assert!(lasso.contains(1, 4) && lasso.contains(8, 4), "both lobes");
+        assert!(!lasso.contains(4, 1) && !lasso.contains(4, 8), "neither wedge");
+    }
+
+    #[test]
+    fn an_empty_lasso_selects_nothing() {
+        let lasso = super::Selection::from_polygon(4, 4, &[]);
+        assert!(lasso.bounds().is_none());
+    }
+
     use super::*;
     use crate::editor::color::Rgba;
 
