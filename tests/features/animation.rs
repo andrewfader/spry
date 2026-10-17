@@ -63,3 +63,14 @@ fn tags_must_name_frames_that_exist() {
     scenario.when_trying(Command::AddTag { name: "run".into(), from: 0, to: 9, direction: LoopDirection::Forward });
     scenario.then_it_failed_saying("frame 9");
 }
+
+#[test]
+fn re_adding_a_tag_by_name_changes_its_direction_without_duplicating_it() {
+    let mut scenario = given_a_blank_sprite(4, 4);
+    scenario.when(Command::AddFrame).and(Command::AddFrame);
+    let tag = |direction| Command::AddTag { name: "walk".into(), from: 0, to: 2, direction };
+    scenario.when(tag(LoopDirection::Forward)).and(tag(LoopDirection::PingPong));
+    let tags = &scenario.sprite().tags;
+    assert_eq!(tags.len(), 1);
+    assert_eq!((tags[0].from, tags[0].to, tags[0].direction), (0, 2, LoopDirection::PingPong));
+}

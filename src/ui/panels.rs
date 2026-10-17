@@ -760,6 +760,7 @@ impl App {
                     });
                 }
             });
+            cel_grid(ui, sprite, layer, current, &mut commands);
         });
         ui.horizontal(|ui| {
             ui.weak("Tags:");
@@ -776,6 +777,19 @@ impl App {
                     }
                 );
                 ui.label(label).context_menu(|ui| {
+                    for (direction, name) in [
+                        (LoopDirection::Forward, "Play forward →"),
+                        (LoopDirection::Reverse, "Play in reverse ←"),
+                        (LoopDirection::PingPong, "Ping-pong ↔"),
+                    ] {
+                        if ui.radio(tag.direction == direction, name).clicked() {
+                            // Adding a tag under an existing name replaces it.
+                            let (name, from, to) = (tag.name.clone(), tag.from, tag.to);
+                            commands.push(Command::AddTag { name, from, to, direction });
+                            ui.close_menu();
+                        }
+                    }
+                    ui.separator();
                     if ui.button("Remove tag").clicked() {
                         commands.push(Command::RemoveTag { name: tag.name.clone() });
                         ui.close_menu();
@@ -1573,6 +1587,39 @@ fn time_ago(seconds: u64) -> String {
         3600..=86_399 => format!("{} h ago", seconds / 3600),
         _ => format!("{} days ago", seconds / 86_400),
     }
+}
+
+/// Aseprite's cel grid: one row per layer (top layer first), one column
+/// per frame. ■ is a cel with art, ◆ a cel linked to other frames (a
+/// clone), · an empty cel. Clicking a cell picks that layer and frame.
+fn cel_grid(
+    ui: &mut egui::Ui,
+    sprite: &crate::editor::Sprite,
+    current_layer: usize,
+    current_frame: usize,
+    commands: &mut Vec<Command>,
+) {
+    egui::Grid::new("cel-grid").spacing([2.0, 2.0]).show(ui, |ui| {
+        for layer in (0..sprite.layers.len()).rev() {
+            let name: String = sprite.layers[layer].name.chars().take(10).collect();
+            ui.label(RichText::new(name).small().strong());
+            for frame in 0..sprite.frame_count() {
+                let has_art = sprite.cel_image(layer, frame).is_some_and(|image| !image.is_blank());
+                let symbol = match (has_art, sprite.is_linked(layer, frame)) {
+                    (true, true) => "◆",
+                    (true, false) => "■",
+                    (false, _) => "·",
+                };
+                let here = layer == current_layer && frame == current_frame;
+                let cell = ui.add_sized([18.0, 18.0], egui::SelectableLabel::new(here, symbol));
+                if cell.on_hover_text(format!("{}, frame {}", sprite.layers[layer].name, frame + 1)).clicked() {
+                    commands.push(Command::SelectLayer { index: layer });
+                    commands.push(Command::SelectFrame { index: frame });
+                }
+            }
+            ui.end_row();
+        }
+    });
 }
 
 #[cfg(test)]
