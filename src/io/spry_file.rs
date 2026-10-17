@@ -30,9 +30,17 @@ pub fn encode(document: &Document) -> Result<Vec<u8>> {
     Ok(gzip.finish()?)
 }
 
+/// The largest a `.spry` file may grow when unzipped. Real documents are a
+/// tiny fraction of this. The cap stops a crafted "zip bomb" from filling
+/// memory.
+const MAX_UNZIPPED_BYTES: u64 = 1 << 30;
+
 pub fn decode(bytes: &[u8]) -> Result<Document> {
     let mut text = String::new();
-    GzDecoder::new(bytes).read_to_string(&mut text).context("this is not a .spry file (it isn't gzip-compressed)")?;
+    GzDecoder::new(bytes)
+        .take(MAX_UNZIPPED_BYTES)
+        .read_to_string(&mut text)
+        .context("this is not a .spry file (it isn't gzip-compressed)")?;
     let mut file: Value = serde_json::from_str(&text).context("the .spry file is damaged (invalid JSON)")?;
     if file["format"] != FORMAT {
         bail!("this is not a .spry file");
@@ -46,7 +54,10 @@ pub fn decode(bytes: &[u8]) -> Result<Document> {
     for sprite in sprites_in(&mut tree) {
         put_images_back(sprite, &pool)?;
     }
-    serde_json::from_value(tree).context("the .spry file is damaged (unexpected structure)")
+    let document: Document =
+        serde_json::from_value(tree).context("the .spry file is damaged (unexpected structure)")?;
+    document.validate().map_err(|why| anyhow::anyhow!("the .spry file is damaged: {why}"))?;
+    Ok(document)
 }
 
 pub fn save(path: &std::path::Path, document: &Document) -> Result<()> {

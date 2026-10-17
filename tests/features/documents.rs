@@ -72,3 +72,28 @@ fn opening_a_damaged_file_says_so() {
     let error = Studio::open(&path).err().expect("a damaged file should not open");
     assert!(format!("{error:#}").contains("not a .spry file"));
 }
+
+/// Unzips a saved `.spry`, lets `tamper` edit the JSON, and zips it back.
+fn tamper_with(path: &std::path::Path, tamper: impl Fn(&mut serde_json::Value)) {
+    use std::io::{Read, Write};
+    let mut text = String::new();
+    flate2::read::GzDecoder::new(std::fs::File::open(path).unwrap()).read_to_string(&mut text).unwrap();
+    let mut file: serde_json::Value = serde_json::from_str(&text).unwrap();
+    tamper(&mut file);
+    let mut gzip = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+    gzip.write_all(file.to_string().as_bytes()).unwrap();
+    std::fs::write(path, gzip.finish().unwrap()).unwrap();
+}
+
+#[test]
+fn a_damaged_file_is_refused_with_a_reason_instead_of_crashing() {
+    let mut scenario = given_a_blank_sprite(8, 8);
+    scenario.when(Command::Fill { at: (0, 0), ink: Ink::colour(RED), contiguous: true }).and(Command::AddFrame);
+    let path = scenario.path("hero.spry");
+    scenario.studio.save(Some(&path)).unwrap();
+
+    tamper_with(&path, |file| file["document"]["sprite"]["frames"].as_array_mut().unwrap().truncate(1));
+
+    let refusal = Studio::open(&path).err().expect("the damaged file is refused");
+    assert!(format!("{refusal:#}").contains("cels for 1 frames"), "{refusal:#}");
+}

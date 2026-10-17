@@ -118,6 +118,53 @@ impl Sprite {
         self.frames.len()
     }
 
+    /// Checks the promises the rest of the editor relies on: every layer
+    /// has one cel per frame, every cel points at a pooled image the size
+    /// of the canvas, tags stay inside the timeline, and new ids won't
+    /// collide with old ones. A sprite read from disk must pass this
+    /// before anything indexes into it.
+    pub fn validate(&self) -> Result<(), String> {
+        super::limits::check_canvas_size(self.width, self.height)?;
+        if self.layers.is_empty() || self.frames.is_empty() {
+            return Err("a sprite needs at least one layer and one frame".into());
+        }
+        for layer in &self.layers {
+            if layer.cels.len() != self.frames.len() {
+                return Err(format!(
+                    "layer \"{}\" has {} cels for {} frames",
+                    layer.name,
+                    layer.cels.len(),
+                    self.frames.len()
+                ));
+            }
+            if layer.id.0 >= self.next_layer_id {
+                return Err(format!("layer \"{}\" has an id from the future", layer.name));
+            }
+            if let Some(missing) = layer.cels.iter().flatten().find(|id| !self.images.contains_key(id)) {
+                return Err(format!("layer \"{}\" points at missing image {}", layer.name, missing.0));
+            }
+        }
+        for (id, image) in &self.images {
+            if (image.width(), image.height()) != (self.width, self.height) {
+                return Err(format!(
+                    "image {} is {}×{} on a {}×{} canvas",
+                    id.0,
+                    image.width(),
+                    image.height(),
+                    self.width,
+                    self.height
+                ));
+            }
+            if id.0 >= self.next_image_id {
+                return Err(format!("image {} has an id from the future", id.0));
+            }
+        }
+        if let Some(tag) = self.tags.iter().find(|t| t.from > t.to || t.to >= self.frames.len()) {
+            return Err(format!("tag \"{}\" runs past the last frame", tag.name));
+        }
+        Ok(())
+    }
+
     pub fn bounds(&self) -> Rect {
         Rect::new(0, 0, self.width, self.height)
     }
@@ -497,6 +544,33 @@ mod tests {
         sprite.slices.push(Slice { name: "hand".into(), bounds: Rect::new(1, 1, 2, 2) });
         sprite.resize_canvas(8, 8, 2, 3);
         assert_eq!(sprite.slices[0].bounds, Rect::new(3, 4, 2, 2));
+    }
+
+    #[test]
+    fn a_fresh_sprite_is_valid() {
+        let mut sprite = Sprite::new(4, 4);
+        sprite.cel_image_mut(0, 0).set(0, 0, RED);
+        sprite.insert_frame(1, 100);
+        assert_eq!(sprite.validate(), Ok(()));
+    }
+
+    #[test]
+    fn validation_catches_every_broken_promise() {
+        let broken: [fn(&mut Sprite); 5] = [
+            |s| s.layers[0].cels.push(None),
+            |s| s.layers[0].cels[0] = Some(ImageId(99)),
+            |s| s.width = 0,
+            |s| s.tags.push(Tag { name: "walk".into(), from: 0, to: 5, direction: LoopDirection::Forward }),
+            |s| {
+                s.cel_image_mut(0, 0);
+                s.width = 8;
+            },
+        ];
+        for (index, breaking) in broken.iter().enumerate() {
+            let mut sprite = Sprite::new(4, 4);
+            breaking(&mut sprite);
+            assert!(sprite.validate().is_err(), "case {index} slipped through");
+        }
     }
 
     #[test]

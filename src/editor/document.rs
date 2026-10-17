@@ -28,6 +28,19 @@ pub struct Document {
 }
 
 impl Document {
+    /// The current sprite and every version must be sound. See
+    /// `Sprite::validate`.
+    pub fn validate(&self) -> Result<(), String> {
+        self.sprite.validate()?;
+        for version in &self.versions {
+            version.sprite.validate().map_err(|why| format!("version \"{}\": {why}", version.message))?;
+        }
+        if self.versions.iter().any(|v| v.id >= self.next_version_id) {
+            return Err("a version has an id from the future".into());
+        }
+        Ok(())
+    }
+
     pub fn new(sprite: Sprite) -> Document {
         Document { sprite, versions: Vec::new(), next_version_id: 1 }
     }
