@@ -259,3 +259,19 @@ fn a_model_can_work_across_layers_and_frames_with_tools_alone() {
     let missing = scenario.tool("select_layer", json!({ "index": 9 })).err().unwrap();
     assert!(missing.contains("layer 9"), "{missing}");
 }
+
+#[test]
+fn a_model_can_group_layers_and_set_blend_modes() {
+    let mut scenario = given_a_blank_sprite(8, 8);
+    let ok = |result: Result<spry::mcp::tools::ToolOutput, String>| result.unwrap_or_else(|e| panic!("{e}")).text;
+    ok(scenario.tool("add_group", json!({ "name": "Lights" })));
+    ok(scenario.tool("add_layer", json!({ "name": "Glow" })));
+    ok(scenario.tool("set_layer", json!({ "group": 1, "blend": "screen", "opacity": 200 })));
+    let glow = &scenario.sprite().layers[1];
+    assert_eq!((glow.name.as_str(), glow.blend, glow.opacity), ("Glow", spry::editor::BlendMode::Screen, 200));
+    assert_eq!(glow.parent, Some(scenario.sprite().layers[2].id));
+    let info = ok(scenario.tool("document_info", json!({})));
+    assert!(info.contains("2: group Lights") && info.contains("    1: Glow"), "{info}");
+    let refused = scenario.tool("set_layer", json!({ "blend": "sparkle" })).err().unwrap();
+    assert!(refused.contains("isn't a blend mode"), "{refused}");
+}

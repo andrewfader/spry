@@ -5,6 +5,7 @@
 //! Out-of-bounds reads give transparent and out-of-bounds writes do nothing,
 //! which spares every tool from clipping on its own.
 
+use super::blend::{blend_over, BlendMode};
 use super::color::Rgba;
 use base64::Engine;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -172,6 +173,20 @@ impl Pixels {
             if !paint.is_transparent() {
                 let below = self.get(at_x + x, at_y + y);
                 self.set(at_x + x, at_y + y, paint.over(below, opacity));
+            }
+        }
+    }
+
+    /// Like `stamp`, mixing colours with a blend mode.
+    pub fn stamp_blended(&mut self, source: &Pixels, at_x: i32, at_y: i32, opacity: u8, mode: BlendMode) {
+        if mode == BlendMode::Normal {
+            return self.stamp(source, at_x, at_y, opacity);
+        }
+        for (x, y) in source.bounds().points() {
+            let paint = source.get(x, y);
+            if !paint.is_transparent() {
+                let below = self.get(at_x + x, at_y + y);
+                self.set(at_x + x, at_y + y, blend_over(paint, below, opacity, mode));
             }
         }
     }

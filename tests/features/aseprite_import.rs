@@ -4,7 +4,7 @@
 //! by the small writer below, then opened through the real `Studio::open`.
 
 use crate::support::*;
-use spry::editor::{LoopDirection, Rgba};
+use spry::editor::{BlendMode, LoopDirection};
 use spry::studio::Studio;
 use std::io::Write;
 
@@ -13,6 +13,7 @@ const CEL: u16 = 0x2005;
 const TAGS: u16 = 0x2018;
 const PALETTE: u16 = 0x2019;
 const SLICE: u16 = 0x2022;
+const TILESET: u16 = 0x2023;
 
 /// Little-endian byte building, the way the spec lays fields out.
 #[derive(Default)]
@@ -128,8 +129,39 @@ fn chunk(kind: u16, body: Bytes) -> Vec<u8> {
 
 /// `flags`: 1 visible, 2 editable. `kind`: 0 image, 1 group.
 fn layer(name: &str, flags: u16, kind: u16, blend: u16, opacity: u8) -> Vec<u8> {
-    let body = Bytes::default().word(flags).word(kind).word(0).word(0).word(0).word(blend).byte(opacity).zeros(3);
+    layer_at(name, flags, kind, blend, opacity, 0)
+}
+
+/// A layer `level` groups deep under the groups written before it.
+fn layer_at(name: &str, flags: u16, kind: u16, blend: u16, opacity: u8, level: u16) -> Vec<u8> {
+    let body = Bytes::default().word(flags).word(kind).word(level).word(0).word(0).word(blend).byte(opacity).zeros(3);
     chunk(LAYER, body.string(name))
+}
+
+fn tilemap_layer(name: &str, tileset: u32) -> Vec<u8> {
+    let body = Bytes::default().word(1).word(2).word(0).word(0).word(0).word(0).byte(255).zeros(3);
+    chunk(LAYER, body.string(name).dword(tileset))
+}
+
+fn zlib(bytes: &[u8]) -> Vec<u8> {
+    let mut zlib = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+    zlib.write_all(bytes).unwrap();
+    zlib.finish().unwrap()
+}
+
+/// A tileset whose tiles are stored in this file, as one vertical strip.
+fn tileset(id: u32, tile_width: u16, tile_height: u16, strip: &[u8]) -> Vec<u8> {
+    let count = (strip.len() / (tile_width as usize * tile_height as usize * 4)) as u32;
+    let pixels = zlib(strip);
+    let body = Bytes::default().dword(id).dword(2).dword(count).word(tile_width).word(tile_height).short(1).zeros(14);
+    chunk(TILESET, body.string("tiles").dword(pixels.len() as u32).raw(&pixels))
+}
+
+/// A tilemap cel `size` tiles across; bit 31 of an entry flips it in x.
+fn tilemap_cel(layer: u16, size: (u16, u16), entries: &[u8]) -> Vec<u8> {
+    let header = cel_header(layer, 0, 0, 255, 3).word(size.0).word(size.1).word(32);
+    let masks = header.dword(0x1fff_ffff).dword(0x8000_0000).dword(0x4000_0000).dword(0x2000_0000).zeros(10);
+    chunk(CEL, masks.raw(&zlib(entries)))
 }
 
 fn cel_header(layer: u16, x: i16, y: i16, opacity: u8, kind: u16) -> Bytes {
@@ -230,33 +262,59 @@ fn indexed_colour_files_use_their_palette_and_transparent_index() {
 }
 
 #[test]
-fn cel_opacity_is_baked_into_the_pixels() {
+fn cel_opacity_comes_across_as_the_cels_own() {
     let scenario = given_a_blank_sprite(1, 1);
     let file = AsepriteFile::rgba(2, 2)
-        .frame(100, vec![layer("Glow", 1, 0, 0, 255), raw_cel(0, (0, 0), 128, (1, 1), &RED_PX)]);
+        .frame(100, vec![layer("Glow", 1, 0, 0, 255), raw_cel(0, (0, 0), 128, (1, 1), &RED_PX)])
+        .frame(100, vec![linked_cel(0, 0)]);
     let studio = Studio::open(&file.save_in(&scenario, "glow.aseprite")).unwrap();
-    assert_eq!(studio.editor.sprite().cel_image(0, 0).unwrap().get(0, 0), Rgba::rgba(255, 0, 77, 128));
+    let sprite = studio.editor.sprite();
+    assert_eq!(sprite.cel(0, 0).unwrap().opacity, 128);
+    assert_eq!(sprite.cel_image(0, 0).unwrap().get(0, 0), RED, "the pixels themselves stay solid");
+    assert_eq!(sprite.composite(0).get(0, 0).a(), 128, "but the cel shows at half strength");
+    assert_eq!(sprite.cel(0, 1).unwrap().opacity, 255, "a linked cel keeps its own opacity");
 }
 
 #[test]
-fn what_spry_cannot_represent_is_named_not_silently_dropped() {
+fn groups_and_blend_modes_come_across_intact() {
     let scenario = given_a_blank_sprite(1, 1);
     let file = AsepriteFile::rgba(4, 4).frame(
         100,
         vec![
+            layer("Base", 1, 0, 0, 255),
             layer("Arm", 1, 1, 0, 255),
-            layer("Sleeve", 1, 0, 0, 255),
-            layer("Shine", 1, 0, 9, 255),
-            raw_cel(1, (0, 0), 255, (1, 1), &RED_PX),
+            layer_at("Sleeve", 1, 0, 0, 255, 1),
+            layer_at("Shine", 1, 0, 2, 255, 1),
+            raw_cel(0, (0, 0), 255, (1, 1), &RED_PX),
+            raw_cel(2, (0, 0), 255, (1, 1), &BLUE_PX),
         ],
     );
     let studio = Studio::open(&file.save_in(&scenario, "arm.aseprite")).unwrap();
-    let names: Vec<&str> = studio.editor.sprite().layers.iter().map(|l| l.name.as_str()).collect();
-    assert_eq!(names, vec!["Sleeve", "Shine"], "the group is gone but its children stay");
-    assert_eq!(studio.editor.sprite().cel_image(0, 0).unwrap().get(0, 0), RED, "cels still find their layer");
-    let report = studio.notices.join("\n");
-    assert!(report.contains("group") && report.contains("Arm"), "{report}");
-    assert!(report.contains("blend") && report.contains("Shine"), "{report}");
+    let sprite = studio.editor.sprite();
+    let names: Vec<&str> = sprite.layers.iter().map(|l| l.name.as_str()).collect();
+    assert_eq!(names, vec!["Base", "Sleeve", "Shine", "Arm"], "children sit under their group");
+    let arm = sprite.layers[3].id;
+    assert!(sprite.layers[3].is_group());
+    assert_eq!((sprite.layers[1].parent, sprite.layers[2].parent), (Some(arm), Some(arm)));
+    assert_eq!(sprite.layers[2].blend, BlendMode::Screen);
+    assert_eq!(sprite.cel_image(1, 0).unwrap().get(0, 0), BLUE, "cels find their layer through the group");
+    assert!(studio.notices.is_empty(), "nothing was lost: {:?}", studio.notices);
+}
+
+#[test]
+fn tilemap_layers_are_drawn_out_tile_by_tile() {
+    let scenario = given_a_blank_sprite(1, 1);
+    // Two 2×2 tiles stacked in one strip: tile 0 is empty by convention,
+    // tile 1 is solid red.
+    let mut strip = vec![0u8; 2 * 2 * 4];
+    strip.extend(RED_PX.repeat(4));
+    let entries: Vec<u8> = [1u32, 0, 0x8000_0001, 1].iter().flat_map(|e| e.to_le_bytes()).collect();
+    let file = AsepriteFile::rgba(4, 4)
+        .frame(100, vec![tileset(7, 2, 2, &strip), tilemap_layer("Ground", 7), tilemap_cel(0, (2, 2), &entries)]);
+    let studio = Studio::open(&file.save_in(&scenario, "ground.aseprite")).unwrap();
+    let image = studio.editor.sprite().cel_image(0, 0).unwrap();
+    assert_eq!([image.get(0, 0), image.get(1, 1), image.get(2, 0), image.get(1, 2)], [RED, RED, CLEAR, RED]);
+    assert!(studio.notices.join(" ").contains("Ground"), "the change of kind is reported");
 }
 
 #[test]

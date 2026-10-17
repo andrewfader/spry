@@ -11,7 +11,7 @@ use crate::ai::diffusion::{self, Generation, Landing};
 use crate::editor::dither::CLASSIC_PATTERNS;
 use crate::editor::limits::MAX_CANVAS_SIDE;
 use crate::editor::playback;
-use crate::editor::{Command, LoopDirection, Palette, Pattern, Rgba};
+use crate::editor::{BlendMode, Command, LoopDirection, Palette, Pattern, Rgba};
 use crate::io::{SheetLayout, SheetOptions};
 use crate::studio::Studio;
 use egui::{Align2, Color32, RichText, Sense, Vec2};
@@ -481,60 +481,80 @@ impl App {
 
     fn layers_panel(&mut self, ui: &mut egui::Ui) {
         let editor = &self.studio().editor;
-        let layers: Vec<(String, bool, bool, u8)> =
-            editor.sprite().layers.iter().map(|l| (l.name.clone(), l.visible, l.locked, l.opacity)).collect();
+        let sprite = editor.sprite();
+        let rows: Vec<LayerRow> = (0..sprite.layers.len()).map(|index| LayerRow::of(sprite, index)).collect();
         let current = editor.layer;
+        let cel_opacity = sprite.cel(current, editor.frame).map(|cel| cel.opacity);
         let mut commands: Vec<Command> = Vec::new();
         ui.horizontal(|ui| {
             if ui.button("➕").on_hover_text("New layer").clicked() {
                 commands.push(Command::AddLayer { name: None });
             }
-            if ui.button("⧉").on_hover_text("Duplicate layer").clicked() {
+            if ui.button("📁").on_hover_text("New group").clicked() {
+                commands.push(Command::AddGroup { name: None });
+            }
+            if ui.button("⧉").on_hover_text("Duplicate layer (a group copies everything in it)").clicked() {
                 commands.push(Command::DuplicateLayer);
             }
             if ui.button("⤓").on_hover_text("Merge down").clicked() {
                 commands.push(Command::MergeDown);
             }
-            if ui.button("⏶").on_hover_text("Move up").clicked() && current + 1 < layers.len() {
+            if ui.button("⏶").on_hover_text("Move up").clicked() && current + 1 < rows.len() {
                 commands.push(Command::MoveLayer { to: current + 1 });
             }
             if ui.button("⏷").on_hover_text("Move down").clicked() && current > 0 {
                 commands.push(Command::MoveLayer { to: current - 1 });
             }
-            if ui.button("🗑").on_hover_text("Delete layer").clicked() {
+            if ui.button("🗑").on_hover_text("Delete layer (a group goes with everything in it)").clicked() {
                 commands.push(Command::RemoveLayer);
             }
         });
         ui.separator();
-        // Top of the stack first, as artists expect.
-        for index in (0..layers.len()).rev() {
-            let (name, visible, locked, _) = &layers[index];
+        // Top of the stack first, as artists expect, with children indented
+        // under their group.
+        for index in (0..rows.len()).rev() {
+            let row = &rows[index];
             ui.horizontal(|ui| {
-                if ui
-                    .selectable_label(*visible, if *visible { "👁" } else { "–" })
-                    .on_hover_text("Show / hide")
-                    .clicked()
+                let (visible, locked) = (row.visible, row.locked);
+                if ui.selectable_label(visible, if visible { "👁" } else { "–" }).on_hover_text("Show / hide").clicked()
                 {
-                    commands.push(Command::SelectLayer { index });
-                    commands.push(Command::SetLayerVisible { visible: !visible });
-                    commands.push(Command::SelectLayer { index: current });
+                    commands.extend(on_layer(index, current, Command::SetLayerVisible { visible: !visible }));
                 }
                 if ui
-                    .selectable_label(*locked, if *locked { "🔒" } else { "🔓" })
+                    .selectable_label(locked, if locked { "🔒" } else { "🔓" })
                     .on_hover_text("Lock / unlock")
                     .clicked()
                 {
-                    commands.push(Command::SelectLayer { index });
-                    commands.push(Command::SetLayerLocked { locked: !locked });
-                    commands.push(Command::SelectLayer { index: current });
+                    commands.extend(on_layer(index, current, Command::SetLayerLocked { locked: !locked }));
                 }
-                if ui.add_sized([150.0, 24.0], egui::SelectableLabel::new(index == current, name.as_str())).clicked() {
+                ui.add_space(row.depth as f32 * 14.0);
+                let label = if row.is_group { format!("📁 {}", row.name) } else { row.name.clone() };
+                let width = (150.0 - row.depth as f32 * 14.0).max(60.0);
+                let response = ui.add_sized([width, 24.0], egui::SelectableLabel::new(index == current, label));
+                if response.clicked() {
                     commands.push(Command::SelectLayer { index });
                 }
+                response.context_menu(|ui| {
+                    ui.label(RichText::new("Move into group").weak());
+                    for group in rows.iter().enumerate().filter(|(g, r)| r.is_group && *g != index) {
+                        if ui.button(format!("📁 {}", group.1.name)).clicked() {
+                            // Indexes shift as the layer moves, so stay with it.
+                            commands.extend([
+                                Command::SelectLayer { index },
+                                Command::SetLayerParent { group: Some(group.0) },
+                            ]);
+                            ui.close_menu();
+                        }
+                    }
+                    if row.depth > 0 && ui.button("Out to the top level").clicked() {
+                        commands.extend([Command::SelectLayer { index }, Command::SetLayerParent { group: None }]);
+                        ui.close_menu();
+                    }
+                });
             });
         }
         ui.separator();
-        let (saved_name, _, _, mut opacity) = layers[current].clone();
+        let LayerRow { name: saved_name, mut opacity, mut blend, .. } = rows[current].clone();
         // The draft lives across frames; reading the name back from the
         // document each frame would throw away every keystroke.
         let mut name = match &self.layer_name_draft {
@@ -560,6 +580,25 @@ impl App {
                 commands.push(Command::SetLayerOpacity { opacity });
             }
         });
+        ui.horizontal(|ui| {
+            ui.label("Blend");
+            egui::ComboBox::from_id_salt("layer-blend").selected_text(blend.name()).show_ui(ui, |ui| {
+                for mode in BlendMode::ALL {
+                    if ui.selectable_value(&mut blend, mode, mode.name()).clicked() {
+                        commands.push(Command::SetLayerBlend { blend: mode });
+                    }
+                }
+            });
+        });
+        if let Some(mut cel_opacity) = cel_opacity {
+            ui.horizontal(|ui| {
+                ui.label("Cel");
+                let slider = egui::Slider::new(&mut cel_opacity, 0..=255).text("opacity on this frame");
+                if ui.add(slider).drag_stopped() {
+                    commands.push(Command::SetCelOpacity { opacity: cel_opacity });
+                }
+            });
+        }
         for command in commands {
             self.edit(command);
         }
@@ -1587,6 +1626,38 @@ fn time_ago(seconds: u64) -> String {
         3600..=86_399 => format!("{} h ago", seconds / 3600),
         _ => format!("{} days ago", seconds / 86_400),
     }
+}
+
+/// What the Layers panel shows for one layer.
+#[derive(Clone)]
+struct LayerRow {
+    name: String,
+    visible: bool,
+    locked: bool,
+    opacity: u8,
+    blend: BlendMode,
+    depth: usize,
+    is_group: bool,
+}
+
+impl LayerRow {
+    fn of(sprite: &crate::editor::Sprite, index: usize) -> LayerRow {
+        let layer = &sprite.layers[index];
+        LayerRow {
+            name: layer.name.clone(),
+            visible: layer.visible,
+            locked: layer.locked,
+            opacity: layer.opacity,
+            blend: layer.blend,
+            depth: sprite.depth(index),
+            is_group: layer.is_group(),
+        }
+    }
+}
+
+/// Runs `command` on another layer and comes back to the current one.
+fn on_layer(index: usize, current: usize, command: Command) -> [Command; 3] {
+    [Command::SelectLayer { index }, command, Command::SelectLayer { index: current }]
 }
 
 /// Aseprite's cel grid: one row per layer (top layer first), one column

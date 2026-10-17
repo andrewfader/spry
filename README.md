@@ -37,12 +37,14 @@ They're anchored to the canvas, so neighbouring strokes tile seamlessly. A
 dither-gradient tool draws ordered gradients between two colours.
 
 **Aseprite-style animation.** Layers with opacity, visibility, lock, reorder,
-duplicate and merge down. Frames with per-frame durations, tags with
+duplicate and merge down, Aseprite's nineteen blend modes, per-cel opacity,
+and groups (nested, with their own opacity and blend). Frames with per-frame durations, tags with
 forward / reverse / ping-pong loops, onion skin (up to 8 frames each way,
 fading with distance), a live preview, and timeline thumbnails. Opens
 `.aseprite` / `.ase` files: layers, cels and offsets, linked cels, tags,
-palette, slices, and RGBA, grayscale and indexed colour. Group layers are
-flattened and blend modes come in as normal, and the import says so.
+palette, slices, and RGBA, grayscale and indexed colour, with groups, blend
+modes and cel opacity intact. Tilemap layers are drawn out into image
+layers, and the import says so.
 
 **Clones.** "Clone frame" makes linked cels: paint one and every linked cel
 changes. Unlink when you want them to part ways. There's also a clone stamp
@@ -73,7 +75,7 @@ trimming and duplicate merging) with Aseprite-format JSON (`frames`,
 `frameTags`, `slices`, plus Spry's `notes`). It can also import a sheet back
 into frames, detecting the grid from transparent gutters.
 
-**MCP.** `spry mcp [file]` serves 30 tools over stdio: drawing with
+**MCP.** `spry mcp [file]` serves 32 tools over stdio: drawing with
 colours, patterns and brushes, a text pixel grid, a rendered PNG the model can
 look at, layers, frames, clones, tags, palettes, notes, versions, exports,
 undo, and `run_command` for every other editor verb. In the app, enable

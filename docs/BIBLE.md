@@ -129,6 +129,22 @@ file.
   opacity 0–255, and lock.
 - Given two layers with overlapping pixels, when the top is at 50% opacity,
   then the composite is the alpha blend.
+- Blend modes: Aseprite's nineteen (normal, multiply, screen, overlay,
+  darken, lighten, colour dodge/burn, hard/soft light, difference,
+  exclusion, hue, saturation, colour, luminosity, addition, subtract,
+  divide), per the W3C compositing formulas.
+- Given an orange layer under a 50% grey multiply layer, then the composite
+  is (128, 64, 0).
+- Cel opacity: each cel fades on its own, on top of its layer's opacity. A
+  clone shares pixels but keeps its own opacity.
+- Groups: layers can go into groups, at any depth. A group composites its
+  children first and lays the result down with its own opacity and blend.
+  Hiding a group hides everything in it. Deleting or duplicating a group
+  takes everything in it. A group can't hold pixels, and can't go inside
+  itself.
+- Given a group holding a layer, when I hide the group, then that layer's
+  pixels vanish from the composite. When I delete the group and undo, then
+  both come back.
 
 ### 6. Frames, animation & onion skin (`animation.rs`)
 - Add, duplicate, remove and reorder frames, with per-frame duration.
@@ -276,15 +292,16 @@ Built after the core, each with its own scenarios when it starts:
 ### 20. Opening Aseprite files (`aseprite_import.rs`)
 Most pixel artists' existing work is in `.aseprite`/`.ase` files, so Spry
 opens them (the published file spec) as new, unsaved documents.
-- Imported: canvas size, frames and their durations, layers (name,
-  visibility, lock, opacity), cels at their offsets (raw, compressed and
-  linked, so clones stay clones), cel opacity (baked into the pixels), tags
-  with direction, the palette, slices, and RGBA, grayscale and indexed
-  colour modes.
-- Not representable in Spry yet: group layers (their children import as
-  ordinary layers), blend modes other than normal, tilemap layers, and
-  per-frame slice keys. Each is named in the import report, so nothing
-  vanishes without a word.
+- Imported as they are: canvas size, frames and their durations, layers
+  (name, visibility, lock, opacity, blend mode), groups at any depth, cels
+  at their offsets (raw, compressed and linked, so clones stay clones) with
+  their own opacity, tags with direction, the palette, slices, and RGBA,
+  grayscale and indexed colour modes.
+- Changed on the way in, and named in the import report: tilemap layers
+  are drawn out tile by tile (with flips) into ordinary image layers, since
+  Spry has no tilesets, and slices keep only their first key.
+- Given a tilemap layer, when I open the file, then each tile's pixels sit
+  at its grid position, flipped as the map says.
 - Given an Aseprite file with two layers, a cel offset by (2, 3) and a
   linked cel, when I open it, then the pixels sit at the offset, the linked
   frames share one image, and the layer names match.

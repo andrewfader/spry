@@ -6,11 +6,18 @@
 //! at an image in a shared pool, so a *clone* (a linked cel) is just two
 //! cels pointing at the same image, and painting one paints both.
 //!
+//! Layers can be grouped. A group holds no pixels of its own. Its
+//! children are composited together first, and the result is laid down
+//! with the group's opacity and blend mode, the way Aseprite does it. In
+//! the flat `layers` list a group's children always sit directly below it
+//! (see `groups.rs`).
+//!
 //! Images are held in `Arc`s, which makes a whole sprite cheap to copy.
 //! Undo history and version snapshots are plain clones of the sprite, and an
 //! image is only actually copied when someone paints on it
 //! (`Arc::make_mut`).
 
+use super::blend::BlendMode;
 use super::color::Rgba;
 use super::palette::Palette;
 use super::pixels::{Pixels, Rect};
@@ -24,6 +31,48 @@ pub struct ImageId(pub u32);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct LayerId(pub u32);
 
+/// Where a layer meets a frame: which pooled image it shows, and how
+/// strongly. Linked cels (clones) share an image but each keeps its own
+/// opacity, as in Aseprite.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(from = "CelOnDisk")]
+pub struct Cel {
+    pub image: ImageId,
+    pub opacity: u8,
+}
+
+impl Cel {
+    pub fn showing(image: ImageId) -> Cel {
+        Cel { image, opacity: 255 }
+    }
+}
+
+/// Files from before cel opacity stored a cel as its bare image id.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum CelOnDisk {
+    BareImage(ImageId),
+    Full { image: ImageId, opacity: u8 },
+}
+
+impl From<CelOnDisk> for Cel {
+    fn from(cel: CelOnDisk) -> Cel {
+        match cel {
+            CelOnDisk::BareImage(image) => Cel::showing(image),
+            CelOnDisk::Full { image, opacity } => Cel { image, opacity },
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LayerKind {
+    #[default]
+    Image,
+    /// Holds other layers (those whose `parent` is this one) and no pixels.
+    Group,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Layer {
     pub id: LayerId,
@@ -31,8 +80,22 @@ pub struct Layer {
     pub visible: bool,
     pub locked: bool,
     pub opacity: u8,
-    /// One entry per frame. `None` is an empty cel.
-    pub cels: Vec<Option<ImageId>>,
+    #[serde(default)]
+    pub blend: BlendMode,
+    #[serde(default)]
+    pub kind: LayerKind,
+    /// The group this layer sits in, or `None` at the top level.
+    #[serde(default)]
+    pub parent: Option<LayerId>,
+    /// One entry per frame. `None` is an empty cel. A group's cels are
+    /// always empty.
+    pub cels: Vec<Option<Cel>>,
+}
+
+impl Layer {
+    pub fn is_group(&self) -> bool {
+        self.kind == LayerKind::Group
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -92,6 +155,11 @@ pub struct Sprite {
 
 pub const DEFAULT_FRAME_MS: u32 = 100;
 
+/// Two 0–255 opacities applied one after the other.
+pub fn mul_opacity(a: u8, b: u8) -> u8 {
+    ((u16::from(a) * u16::from(b) + 127) / 255) as u8
+}
+
 impl Sprite {
     /// A blank sprite: one empty layer called "Layer 1", one 100 ms frame,
     /// and the PICO-8 palette.
@@ -140,8 +208,11 @@ impl Sprite {
             if layer.id.0 >= self.next_layer_id {
                 return Err(format!("layer \"{}\" has an id from the future", layer.name));
             }
-            if let Some(missing) = layer.cels.iter().flatten().find(|id| !self.images.contains_key(id)) {
-                return Err(format!("layer \"{}\" points at missing image {}", layer.name, missing.0));
+            if let Some(missing) = layer.cels.iter().flatten().find(|cel| !self.images.contains_key(&cel.image)) {
+                return Err(format!("layer \"{}\" points at missing image {}", layer.name, missing.image.0));
+            }
+            if layer.is_group() && layer.cels.iter().any(Option::is_some) {
+                return Err(format!("group \"{}\" has pixels of its own", layer.name));
             }
         }
         for (id, image) in &self.images {
@@ -162,7 +233,7 @@ impl Sprite {
         if let Some(tag) = self.tags.iter().find(|t| t.from > t.to || t.to >= self.frames.len()) {
             return Err(format!("tag \"{}\" runs past the last frame", tag.name));
         }
-        Ok(())
+        self.validate_groups()
     }
 
     pub fn bounds(&self) -> Rect {
@@ -185,6 +256,9 @@ impl Sprite {
             visible: true,
             locked: false,
             opacity: 255,
+            blend: BlendMode::Normal,
+            kind: LayerKind::Image,
+            parent: None,
             cels: vec![None; self.frames.len()],
         };
         self.layers.insert(index.min(self.layers.len()), layer);
@@ -199,29 +273,36 @@ impl Sprite {
             .unwrap_or_else(|| "Layer".into())
     }
 
-    /// Copies a layer, with independent pixels, just above itself.
+    /// Copies an image layer, with independent pixels, just above itself,
+    /// in the same group. (Groups are copied whole by `duplicate_group`.)
     pub fn duplicate_layer(&mut self, index: usize) -> usize {
         let source = self.layers[index].clone();
-        let name = format!("{} copy", source.name);
-        let id = self.insert_layer(index + 1, &name);
+        let id = self.insert_layer(index + 1, &format!("{} copy", source.name));
         let copy_index = self.layer_index(id).unwrap_or(index + 1);
-        for frame in 0..self.frames.len() {
-            if let Some(image) = source.cels[frame].and_then(|id| self.images.get(&id).cloned()) {
-                let new_image = self.add_image((*image).clone());
-                self.layers[copy_index].cels[frame] = Some(new_image);
-            }
-        }
-        let copy = &mut self.layers[copy_index];
-        copy.visible = source.visible;
-        copy.opacity = source.opacity;
+        let cels = source
+            .cels
+            .iter()
+            .map(|cel| {
+                cel.and_then(|cel| {
+                    let image = self.images.get(&cel.image).cloned()?;
+                    Some(Cel { image: self.add_image((*image).clone()), ..cel })
+                })
+            })
+            .collect();
+        self.layers[copy_index] = Layer { id, name: format!("{} copy", source.name), cels, ..source };
         copy_index
     }
 
     /// Composites `index` onto the layer below it, keeping the lower layer's
     /// name, and removes the upper one. A hidden layer is dropped unpainted,
-    /// matching what was on screen.
+    /// matching what was on screen. Both must be image layers in the same
+    /// group.
     pub fn merge_down(&mut self, index: usize) -> bool {
         if index == 0 || index >= self.layers.len() {
+            return false;
+        }
+        let (upper, lower) = (&self.layers[index], &self.layers[index - 1]);
+        if upper.is_group() || lower.is_group() || upper.parent != lower.parent {
             return false;
         }
         let upper = self.layers.remove(index);
@@ -232,28 +313,33 @@ impl Sprite {
         true
     }
 
-    /// Paints every cel of `upper` onto layer `lower`. Each merged cel gets a
-    /// fresh image, because the lower cel may be a clone shared with frames
-    /// whose upper art differs. Frames that shared both their lower and their
-    /// upper image still look alike after the merge, so they stay linked.
+    /// Paints every cel of `upper` onto layer `lower`, with the upper
+    /// layer's blend mode and its layer and cel opacity. Each merged cel gets
+    /// a fresh image, because the lower cel may be a clone shared with
+    /// frames whose upper art differs. Frames that shared both their lower
+    /// and their upper cel still look alike after the merge, so they stay
+    /// linked. The lower cel's own opacity is baked into the merged pixels,
+    /// so the result shows at full cel opacity.
     fn stamp_layer_onto(&mut self, upper: &Layer, lower: usize) {
-        let mut merged: BTreeMap<(Option<ImageId>, ImageId), ImageId> = BTreeMap::new();
+        let mut merged: BTreeMap<(Option<Cel>, Cel), ImageId> = BTreeMap::new();
         for frame in 0..self.frames.len() {
             let Some(top) = upper.cels[frame] else { continue };
             let bottom = self.layers[lower].cels[frame];
             let id = match merged.get(&(bottom, top)) {
                 Some(&id) => id,
                 None => {
-                    let mut image = bottom
-                        .and_then(|id| self.images.get(&id))
-                        .map_or_else(|| Pixels::new(self.width, self.height), |image| (**image).clone());
-                    image.stamp(&self.images[&top], 0, 0, upper.opacity);
+                    let mut image = Pixels::new(self.width, self.height);
+                    if let Some(bottom) = bottom {
+                        image.stamp(&self.images[&bottom.image], 0, 0, bottom.opacity);
+                    }
+                    let opacity = mul_opacity(upper.opacity, top.opacity);
+                    image.stamp_blended(&self.images[&top.image], 0, 0, opacity, upper.blend);
                     let id = self.add_image(image);
                     merged.insert((bottom, top), id);
                     id
                 }
             };
-            self.layers[lower].cels[frame] = Some(id);
+            self.layers[lower].cels[frame] = Some(Cel::showing(id));
         }
     }
 
@@ -285,8 +371,8 @@ impl Sprite {
             let target = if as_clone {
                 source
             } else {
-                let pixels = (*self.images[&source]).clone();
-                self.add_image(pixels)
+                let pixels = (*self.images[&source.image]).clone();
+                Cel { image: self.add_image(pixels), ..source }
             };
             self.layers[layer_index].cels[index + 1] = Some(target);
         }
@@ -335,9 +421,13 @@ impl Sprite {
         id
     }
 
+    pub fn cel(&self, layer: usize, frame: usize) -> Option<Cel> {
+        *self.layers.get(layer)?.cels.get(frame)?
+    }
+
     pub fn cel_image(&self, layer: usize, frame: usize) -> Option<&Pixels> {
-        let id = (*self.layers.get(layer)?.cels.get(frame)?)?;
-        self.images.get(&id).map(|image| &**image)
+        let cel = self.cel(layer, frame)?;
+        self.images.get(&cel.image).map(|image| &**image)
     }
 
     /// The image at a cel, ready to paint. An empty cel gets a fresh
@@ -346,10 +436,10 @@ impl Sprite {
     /// copied: they're meant to change together.
     pub fn cel_image_mut(&mut self, layer: usize, frame: usize) -> &mut Pixels {
         let id = match self.layers[layer].cels[frame] {
-            Some(id) => id,
+            Some(cel) => cel.image,
             None => {
                 let id = self.add_image(Pixels::new(self.width, self.height));
-                self.layers[layer].cels[frame] = Some(id);
+                self.layers[layer].cels[frame] = Some(Cel::showing(id));
                 id
             }
         };
@@ -360,14 +450,14 @@ impl Sprite {
     /// Every (layer, frame) that shares the image at this cel, itself
     /// included.
     pub fn linked_cels_of(&self, layer: usize, frame: usize) -> Vec<(usize, usize)> {
-        let Some(target) = self.layers.get(layer).and_then(|l| l.cels.get(frame).copied().flatten()) else {
+        let Some(target) = self.cel(layer, frame).map(|cel| cel.image) else {
             return Vec::new();
         };
         self.layers
             .iter()
             .enumerate()
             .flat_map(|(li, l)| l.cels.iter().enumerate().map(move |(fi, cel)| (li, fi, *cel)))
-            .filter(|&(_, _, cel)| cel == Some(target))
+            .filter(|&(_, _, cel)| cel.is_some_and(|cel| cel.image == target))
             .map(|(li, fi, _)| (li, fi))
             .collect()
     }
@@ -381,9 +471,11 @@ impl Sprite {
         if !self.is_linked(layer, frame) {
             return false;
         }
-        let Some(pixels) = self.cel_image(layer, frame).cloned() else { return false };
-        let id = self.add_image(pixels);
-        self.layers[layer].cels[frame] = Some(id);
+        let (Some(cel), Some(pixels)) = (self.cel(layer, frame), self.cel_image(layer, frame).cloned()) else {
+            return false;
+        };
+        let image = self.add_image(pixels);
+        self.layers[layer].cels[frame] = Some(Cel { image, ..cel });
         true
     }
 
@@ -401,7 +493,7 @@ impl Sprite {
     /// Drops pool images no cel points at any more.
     pub fn collect_unused_images(&mut self) {
         let used: std::collections::HashSet<ImageId> =
-            self.layers.iter().flat_map(|l| l.cels.iter().flatten().copied()).collect();
+            self.layers.iter().flat_map(|l| l.cels.iter().flatten().map(|cel| cel.image)).collect();
         self.images.retain(|id, _| used.contains(id));
     }
 
@@ -427,17 +519,37 @@ impl Sprite {
 
     /// Flattens every visible layer of a frame into one image.
     pub fn composite(&self, frame: usize) -> Pixels {
-        self.composite_where(frame, |layer| layer.visible)
+        self.composite_with(frame, None)
     }
 
-    pub fn composite_where(&self, frame: usize, include: impl Fn(&Layer) -> bool) -> Pixels {
+    /// Like `composite`, but showing `stand_in` in place of one layer's
+    /// cel. The editor uses this to show floating pixels before they're
+    /// anchored.
+    pub fn composite_with(&self, frame: usize, stand_in: Option<(usize, &Pixels)>) -> Pixels {
+        self.composite_children(frame, None, stand_in)
+    }
+
+    /// Composites the visible layers directly inside `parent` (the top
+    /// level when `None`), bottom to top. A group is composited on its own
+    /// first, then laid down as one picture.
+    fn composite_children(&self, frame: usize, parent: Option<LayerId>, stand_in: Option<(usize, &Pixels)>) -> Pixels {
         let mut out = Pixels::new(self.width, self.height);
         for (index, layer) in self.layers.iter().enumerate() {
-            if !include(layer) {
+            if layer.parent != parent || !layer.visible {
                 continue;
             }
-            if let Some(image) = self.cel_image(index, frame) {
-                out.stamp(image, 0, 0, layer.opacity);
+            if layer.is_group() {
+                let inside = self.composite_children(frame, Some(layer.id), stand_in);
+                out.stamp_blended(&inside, 0, 0, layer.opacity, layer.blend);
+                continue;
+            }
+            let cel_opacity = self.cel(index, frame).map_or(255, |cel| cel.opacity);
+            let image = match stand_in {
+                Some((stand_in_layer, image)) if stand_in_layer == index => Some(image),
+                _ => self.cel_image(index, frame),
+            };
+            if let Some(image) = image {
+                out.stamp_blended(image, 0, 0, mul_opacity(layer.opacity, cel_opacity), layer.blend);
             }
         }
         out
@@ -558,7 +670,7 @@ mod tests {
     fn validation_catches_every_broken_promise() {
         let broken: [fn(&mut Sprite); 5] = [
             |s| s.layers[0].cels.push(None),
-            |s| s.layers[0].cels[0] = Some(ImageId(99)),
+            |s| s.layers[0].cels[0] = Some(Cel::showing(ImageId(99))),
             |s| s.width = 0,
             |s| s.tags.push(Tag { name: "walk".into(), from: 0, to: 5, direction: LoopDirection::Forward }),
             |s| {

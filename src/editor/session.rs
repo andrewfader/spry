@@ -503,26 +503,57 @@ impl Editor {
 
             Command::AddLayer { name } => {
                 let name = name.unwrap_or_else(|| self.sprite().next_layer_name());
-                let id = self.document.sprite.insert_layer(self.layer + 1, &name);
-                self.layer = self.sprite().layer_index(id).unwrap_or(self.layer);
-                Ok(format!("added layer \"{name}\""))
+                let id = self.insert_beside_current(|sprite, index, parent| {
+                    let id = sprite.insert_layer(index, &name);
+                    let position = sprite.layer_index(id).expect("just inserted");
+                    sprite.layers[position].parent = parent;
+                    id
+                });
+                Ok(format!("added layer \"{name}\"{}", self.inside_which_group(id)))
+            }
+            Command::AddGroup { name } => {
+                let name = name.unwrap_or_else(|| "Group".into());
+                let id = self.insert_beside_current(|sprite, index, parent| sprite.insert_group(index, &name, parent));
+                Ok(format!("added group \"{name}\"{}", self.inside_which_group(id)))
+            }
+            Command::SetLayerParent { group } => {
+                let id = self.sprite().layers[self.layer].id;
+                let group =
+                    group.map(|index| self.check_layer_index(index).map(|i| self.sprite().layers[i].id)).transpose()?;
+                self.document.sprite.set_parent(self.layer, group).map_err(EditError::Invalid)?;
+                self.layer = self.sprite().layer_index(id).unwrap_or(0);
+                Ok(match group {
+                    Some(_) => format!("moved the layer{}", self.inside_which_group(id)),
+                    None => "moved the layer out to the top level".into(),
+                })
             }
             Command::RemoveLayer => {
-                if self.sprite().layers.len() <= 1 {
+                let doomed = &self.sprite().layers[self.layer];
+                let (name, id) = (doomed.name.clone(), doomed.id);
+                if self.sprite().descendants(id).len() + 1 >= self.sprite().layers.len() {
                     return Err(EditError::Invalid("a sprite needs at least one layer".into()));
                 }
-                let removed = self.document.sprite.layers.remove(self.layer);
-                self.document.sprite.collect_unused_images();
-                self.layer = self.layer.min(self.sprite().layers.len() - 1);
-                Ok(format!("removed layer \"{}\"", removed.name))
+                let removed = self.document.sprite.remove_layer(self.layer);
+                self.layer = self.layer.saturating_sub(removed - 1).min(self.sprite().layers.len() - 1);
+                Ok(if removed > 1 {
+                    format!("removed group \"{name}\" and the {} layers in it", removed - 1)
+                } else {
+                    format!("removed layer \"{name}\"")
+                })
             }
             Command::DuplicateLayer => {
-                self.layer = self.document.sprite.duplicate_layer(self.layer);
+                self.layer = if self.sprite().layers[self.layer].is_group() {
+                    self.document.sprite.duplicate_group(self.layer)
+                } else {
+                    self.document.sprite.duplicate_layer(self.layer)
+                };
                 Ok(format!("duplicated into \"{}\"", self.sprite().layers[self.layer].name))
             }
             Command::MergeDown => {
                 if !self.document.sprite.merge_down(self.layer) {
-                    return Err(EditError::Invalid("the bottom layer has nothing to merge into".into()));
+                    return Err(EditError::Invalid(
+                        "merge down needs an image layer with another image layer below it, in the same group".into(),
+                    ));
                 }
                 self.layer -= 1;
                 Ok("merged down".into())
@@ -535,11 +566,15 @@ impl Editor {
                 Ok(format!("renamed the layer to \"{}\"", name.trim()))
             }
             Command::MoveLayer { to } => {
+                // Reorders among siblings. A group moves with its children,
+                // and nothing changes group (that's SetLayerParent).
                 let to = self.check_layer_index(to)?;
                 let layer = self.document.sprite.layers.remove(self.layer);
+                let id = layer.id;
                 self.document.sprite.layers.insert(to, layer);
-                self.layer = to;
-                Ok(format!("moved the layer to position {to}"))
+                self.document.sprite.tidy_layers();
+                self.layer = self.sprite().layer_index(id).unwrap_or(to);
+                Ok(format!("moved the layer to position {}", self.layer))
             }
             Command::SetLayerVisible { visible } => {
                 self.document.sprite.layers[self.layer].visible = visible;
@@ -552,6 +587,18 @@ impl Editor {
             Command::SetLayerOpacity { opacity } => {
                 self.document.sprite.layers[self.layer].opacity = opacity;
                 Ok(format!("set layer opacity to {opacity}"))
+            }
+            Command::SetLayerBlend { blend } => {
+                self.document.sprite.layers[self.layer].blend = blend;
+                Ok(format!("the layer now blends with {}", blend.name()))
+            }
+            Command::SetCelOpacity { opacity } => {
+                let (layer, frame) = (self.layer, self.frame);
+                let cel = self.document.sprite.layers[layer].cels[frame]
+                    .as_mut()
+                    .ok_or_else(|| EditError::Invalid("this cel is empty, so there's nothing to fade".into()))?;
+                cel.opacity = opacity;
+                Ok(format!("set cel opacity to {opacity}"))
             }
             Command::SelectLayer { index } => self.select_layer(index),
             Command::SelectFrame { index } => self.select_frame(index),
@@ -783,10 +830,38 @@ impl Editor {
 
     fn ensure_drawable(&self) -> Result<(), EditError> {
         let layer = &self.sprite().layers[self.layer];
+        if layer.is_group() {
+            return Err(EditError::Invalid(format!(
+                "\"{}\" is a group, which holds layers rather than pixels; pick a layer inside it",
+                layer.name
+            )));
+        }
         if layer.locked {
             return Err(EditError::LayerLocked(layer.name.clone()));
         }
         Ok(())
+    }
+
+    /// Inserts a new layer or group just above the current one, in the
+    /// same group (a group's own level when a group is current), then
+    /// selects it.
+    fn insert_beside_current(
+        &mut self,
+        insert: impl FnOnce(&mut Sprite, usize, Option<super::sprite::LayerId>) -> super::sprite::LayerId,
+    ) -> super::sprite::LayerId {
+        let parent = self.sprite().layers[self.layer].parent;
+        let id = insert(&mut self.document.sprite, self.layer + 1, parent);
+        self.document.sprite.tidy_layers();
+        self.layer = self.sprite().layer_index(id).unwrap_or(self.layer);
+        id
+    }
+
+    fn inside_which_group(&self, id: super::sprite::LayerId) -> String {
+        let sprite = self.sprite();
+        let parent = sprite.layer_index(id).and_then(|i| sprite.layers[i].parent);
+        parent
+            .and_then(|p| sprite.layer_index(p))
+            .map_or(String::new(), |g| format!(" in \"{}\"", sprite.layers[g].name))
     }
 
     fn current_image_or_blank(&self) -> Pixels {
@@ -1080,23 +1155,17 @@ impl Editor {
     /// composited onto their layer.
     pub fn composite_for_display(&self, frame: usize) -> Pixels {
         let sprite = self.sprite();
-        let mut out = Pixels::new(sprite.width, sprite.height);
-        for (index, layer) in sprite.layers.iter().enumerate() {
-            if !layer.visible {
-                continue;
+        match self.floating.as_ref().filter(|_| frame == self.frame) {
+            Some(floating) => {
+                let mut with_floating = sprite
+                    .cel_image(self.layer, frame)
+                    .cloned()
+                    .unwrap_or_else(|| Pixels::new(sprite.width, sprite.height));
+                with_floating.stamp(&floating.pixels, floating.x, floating.y, 255);
+                sprite.composite_with(frame, Some((self.layer, &with_floating)))
             }
-            let floating_here = frame == self.frame && index == self.layer;
-            match (sprite.cel_image(index, frame), floating_here.then_some(()).and(self.floating.as_ref())) {
-                (cel, Some(floating)) => {
-                    let mut with_floating = cel.cloned().unwrap_or_else(|| Pixels::new(sprite.width, sprite.height));
-                    with_floating.stamp(&floating.pixels, floating.x, floating.y, 255);
-                    out.stamp(&with_floating, 0, 0, layer.opacity);
-                }
-                (Some(cel), None) => out.stamp(cel, 0, 0, layer.opacity),
-                (None, None) => {}
-            }
+            None => sprite.composite(frame),
         }
-        out
     }
 
     /// The selection's bounding box, for the UI's handles.

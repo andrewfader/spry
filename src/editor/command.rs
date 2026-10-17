@@ -5,6 +5,7 @@
 //! is serde-tagged (`{"command": "draw_rect", ...}`), so commands can be
 //! logged, scripted and replayed as plain JSON.
 
+use super::blend::BlendMode;
 use super::color::Rgba;
 use super::dither::Pattern;
 use super::palette::Palette;
@@ -216,6 +217,24 @@ pub enum Command {
         locked: bool,
     },
     SetLayerOpacity {
+        opacity: u8,
+    },
+    SetLayerBlend {
+        blend: BlendMode,
+    },
+    /// Adds an empty group above the current layer, at the same level.
+    AddGroup {
+        #[serde(default)]
+        name: Option<String>,
+    },
+    /// Moves the current layer into the group at layer index `group`, or
+    /// out to the top level when `group` is omitted.
+    SetLayerParent {
+        #[serde(default)]
+        group: Option<usize>,
+    },
+    /// How strongly the current cel shows, on top of its layer's opacity.
+    SetCelOpacity {
         opacity: u8,
     },
     SelectLayer {

@@ -7,6 +7,7 @@
 //! undoable as a human one.
 
 use super::Workspace;
+use crate::editor::BlendMode;
 use crate::editor::{Brush, Command, Ink, LoopDirection, Palette, Pattern, PixelValue, Rect, Rgba};
 use crate::io::{self, SheetLayout, SheetOptions};
 use crate::studio::Studio;
@@ -170,6 +171,28 @@ pub fn catalogue() -> Vec<ToolSpec> {
             name: "add_layer",
             description: "Add an empty layer above the current one and make it current.",
             input_schema: object_schema(json!({ "name": { "type": "string" } }), &[]),
+        },
+        ToolSpec {
+            name: "add_group",
+            description: "Add an empty layer group above the current layer and make it current. Move layers into it with set_layer's `group`.",
+            input_schema: object_schema(json!({ "name": { "type": "string" } }), &[]),
+        },
+        ToolSpec {
+            name: "set_layer",
+            description: "Change a layer's properties (the current layer unless `layer` is given). Only the fields you pass change. `group` is the index of a group to move the layer into, or -1 for the top level. `cel_opacity` fades just the current frame's cel.",
+            input_schema: object_schema(
+                json!({
+                    "layer": { "type": "integer" },
+                    "name": { "type": "string" },
+                    "visible": { "type": "boolean" },
+                    "locked": { "type": "boolean" },
+                    "opacity": { "type": "integer", "minimum": 0, "maximum": 255 },
+                    "blend": { "type": "string", "enum": BlendMode::ALL.iter().map(|m| serde_json::to_value(m).unwrap_or_default()).collect::<Vec<_>>() },
+                    "group": { "type": "integer" },
+                    "cel_opacity": { "type": "integer", "minimum": 0, "maximum": 255 }
+                }),
+                &[],
+            ),
         },
         ToolSpec {
             name: "select_layer",
@@ -452,6 +475,8 @@ fn call_on_studio(studio: &mut Studio, name: &str, args: &Value) -> ToolResult {
             )
         }
         "add_layer" => run(studio, Command::AddLayer { name: string(args, "name").map(str::to_string) }),
+        "add_group" => run(studio, Command::AddGroup { name: string(args, "name").map(str::to_string) }),
+        "set_layer" => set_layer(studio, args),
         "select_layer" => run(studio, Command::SelectLayer { index: required_integer(args, "index")?.max(0) as usize }),
         "add_frame" => {
             let copy = args.get("copy").and_then(Value::as_bool).unwrap_or(false);
@@ -573,6 +598,45 @@ fn call_on_studio(studio: &mut Studio, name: &str, args: &Value) -> ToolResult {
     }
 }
 
+/// Applies each property `set_layer` was given as its own command, in a
+/// fixed order. A bad field stops there with an error; the fields before
+/// it have already been applied (and each undoes on its own).
+fn set_layer(studio: &mut Studio, args: &Value) -> ToolResult {
+    if let Some(layer) = integer(args, "layer") {
+        run(studio, Command::SelectLayer { index: layer.max(0) as usize })?;
+    }
+    let mut commands = Vec::new();
+    if let Some(name) = string(args, "name") {
+        commands.push(Command::RenameLayer { name: name.into() });
+    }
+    if let Some(visible) = args.get("visible").and_then(Value::as_bool) {
+        commands.push(Command::SetLayerVisible { visible });
+    }
+    if let Some(locked) = args.get("locked").and_then(Value::as_bool) {
+        commands.push(Command::SetLayerLocked { locked });
+    }
+    if let Some(opacity) = integer(args, "opacity") {
+        commands.push(Command::SetLayerOpacity { opacity: opacity.clamp(0, 255) as u8 });
+    }
+    if let Some(blend) = args.get("blend") {
+        let blend: BlendMode =
+            serde_json::from_value(blend.clone()).map_err(|_| format!("`{blend}` isn't a blend mode"))?;
+        commands.push(Command::SetLayerBlend { blend });
+    }
+    if let Some(group) = integer(args, "group") {
+        commands.push(Command::SetLayerParent { group: (group >= 0).then_some(group as usize) });
+    }
+    if let Some(opacity) = integer(args, "cel_opacity") {
+        commands.push(Command::SetCelOpacity { opacity: opacity.clamp(0, 255) as u8 });
+    }
+    if commands.is_empty() {
+        return Err("set_layer needs at least one property to change".into());
+    }
+    let summaries =
+        commands.into_iter().map(|command| run(studio, command).map(|o| o.text)).collect::<Result<Vec<_>, _>>()?;
+    Ok(ToolOutput::text(summaries.join("; ")))
+}
+
 fn describe(studio: &Studio) -> String {
     let editor = &studio.editor;
     let sprite = editor.sprite();
@@ -587,7 +651,10 @@ fn describe(studio: &Studio) -> String {
                 .collect::<Vec<_>>();
             let marker = if i == editor.layer { " ← current" } else { "" };
             let flags = if flags.is_empty() { String::new() } else { format!(" ({})", flags.join(", ")) };
-            format!("  {i}: {}{flags}, opacity {}{marker}", l.name, l.opacity)
+            let kind = if l.is_group() { "group " } else { "" };
+            let indent = "  ".repeat(sprite.depth(i));
+            let blend = if l.blend == BlendMode::Normal { String::new() } else { format!(", {}", l.blend.name()) };
+            format!("  {indent}{i}: {kind}{}{flags}, opacity {}{blend}{marker}", l.name, l.opacity)
         })
         .collect();
     let frames: Vec<String> = sprite.frames.iter().map(|f| f.duration_ms.to_string()).collect();

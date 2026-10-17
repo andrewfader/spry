@@ -3,18 +3,20 @@
 //!
 //! An Aseprite file is a 128-byte header, then one block per frame, each
 //! holding typed chunks: layers, cels, tags, palette, slices and more.
-//! Spry keeps what it can represent faithfully and names everything else in
-//! the import's `notices`, so a group or blend mode never disappears
-//! without a word.
+//! Spry keeps groups, blend modes and cel opacity as they are. Tilemap
+//! layers are drawn out tile by tile into ordinary image layers, since
+//! Spry has no tilesets. Anything changed on the way in is named in the
+//! import's `notices`, so nothing disappears without a word.
 //!
 //! Every length in the file is checked before it's trusted: a truncated or
 //! hostile file is an error, never a panic or a huge allocation.
 
 use crate::editor::limits::check_canvas_size;
 use crate::editor::palette::Palette;
-use crate::editor::sprite::{LoopDirection, Slice, Tag};
-use crate::editor::{Document, Pixels, Rect, Rgba, Sprite};
+use crate::editor::sprite::{Cel, LayerId, LayerKind, LoopDirection, Slice, Tag};
+use crate::editor::{BlendMode, Document, Pixels, Rect, Rgba, Sprite};
 use anyhow::{bail, ensure, Context, Result};
+use std::collections::HashMap;
 use std::io::Read;
 
 const HEADER_MAGIC: u16 = 0xA5E0;
@@ -26,6 +28,11 @@ const CHUNK_CEL: u16 = 0x2005;
 const CHUNK_TAGS: u16 = 0x2018;
 const CHUNK_PALETTE: u16 = 0x2019;
 const CHUNK_SLICE: u16 = 0x2022;
+const CHUNK_TILESET: u16 = 0x2023;
+
+const TILESET_HAS_PIXELS: u32 = 2;
+/// The most tiles Spry will draw out of one tileset.
+const MAX_TILES: u32 = 65_536;
 
 const LAYER_VISIBLE: u16 = 1;
 const LAYER_EDITABLE: u16 = 2;
@@ -55,18 +62,25 @@ impl ColourDepth {
     }
 }
 
-/// Where each Aseprite layer went: Spry has no groups, so their indexes
-/// shift once groups are dropped.
-enum LayerSlot {
-    Spry(usize),
-    Group,
+/// What a tilemap layer needs to be drawn as pixels.
+struct Tileset {
+    tile_width: u32,
+    tile_height: u32,
+    tiles: Vec<Pixels>,
 }
 
 struct Decoder {
     depth: ColourDepth,
     layer_opacity_valid: bool,
     sprite: Sprite,
-    layer_slots: Vec<LayerSlot>,
+    /// Spry's layer for each Aseprite layer, in file order (the order cels
+    /// refer to them by).
+    layer_slots: Vec<LayerId>,
+    /// The innermost group at each child level, as the layers go by.
+    open_groups: Vec<LayerId>,
+    tilesets: HashMap<u32, Tileset>,
+    /// Which tileset each tilemap layer draws from.
+    tilemap_layers: HashMap<LayerId, u32>,
     palette: Vec<Rgba>,
     /// Tags name frame ranges, so they wait until every frame exists.
     /// Added earlier, inserting later frames would shift them.
@@ -83,6 +97,9 @@ pub fn decode(bytes: &[u8]) -> Result<Import> {
         layer_opacity_valid: header.flags & HEADER_LAYER_OPACITY_VALID != 0,
         sprite: Sprite::new(header.width, header.height),
         layer_slots: Vec::new(),
+        open_groups: Vec::new(),
+        tilesets: HashMap::new(),
+        tilemap_layers: HashMap::new(),
         palette: Vec::new(),
         tags: Vec::new(),
         notices: Vec::new(),
@@ -158,6 +175,7 @@ impl Decoder {
             CHUNK_TAGS => self.read_tags(chunk),
             CHUNK_PALETTE => self.read_palette(chunk),
             CHUNK_SLICE => self.read_slice(chunk),
+            CHUNK_TILESET => self.read_tileset(chunk),
             // Colour profiles, user data, external files, the old palette
             // chunks and the rest carry nothing Spry draws with.
             _ => Ok(()),
@@ -167,33 +185,43 @@ impl Decoder {
     fn read_layer(&mut self, chunk: &mut Reader) -> Result<()> {
         let flags = chunk.word()?;
         let layer_type = chunk.word()?;
-        chunk.skip(2 + 2 + 2)?;
-        let blend_mode = chunk.word()?;
+        let child_level = chunk.word()? as usize;
+        chunk.skip(2 + 2)?;
+        let blend_number = chunk.word()?;
         let opacity = chunk.byte()?;
         chunk.skip(3)?;
         let name = chunk.string()?;
-        match layer_type {
-            0 => {}
-            1 => {
-                self.notices.push(format!("group \"{name}\" was flattened: its layers came in as ordinary layers"));
-                self.layer_slots.push(LayerSlot::Group);
-                return Ok(());
-            }
-            _ => {
-                self.notices.push(format!("tilemap layer \"{name}\" came in empty, since Spry has no tilemaps"));
-            }
-        }
-        if blend_mode != 0 {
-            self.notices
-                .push(format!("layer \"{name}\" uses a blend mode Spry doesn't have yet, so it blends normally"));
-        }
+
+        // A layer's child level says how deep it sits under the groups
+        // read just before it.
+        self.open_groups.truncate(child_level);
+        let parent = child_level.checked_sub(1).and_then(|level| self.open_groups.get(level).copied());
         let index = self.sprite.layers.len();
-        self.sprite.insert_layer(index, &name);
+        let id = self.sprite.insert_layer(index, &name);
         let layer = &mut self.sprite.layers[index];
+        layer.parent = parent;
         layer.visible = flags & LAYER_VISIBLE != 0;
         layer.locked = flags & LAYER_EDITABLE == 0;
         layer.opacity = if self.layer_opacity_valid { opacity } else { 255 };
-        self.layer_slots.push(LayerSlot::Spry(index));
+        layer.blend = BlendMode::from_aseprite(blend_number).unwrap_or_else(|| {
+            self.notices.push(format!(
+                "layer \"{name}\" uses blend mode {blend_number}, unknown to Spry, so it blends normally"
+            ));
+            BlendMode::Normal
+        });
+        match layer_type {
+            1 => {
+                layer.kind = LayerKind::Group;
+                self.open_groups.push(id);
+            }
+            2 => {
+                let tileset = chunk.dword()?;
+                self.tilemap_layers.insert(id, tileset);
+                self.notices.push(format!("tilemap layer \"{name}\" was drawn out into an ordinary layer"));
+            }
+            _ => {}
+        }
+        self.layer_slots.push(id);
         Ok(())
     }
 
@@ -203,40 +231,100 @@ impl Decoder {
         let opacity = chunk.byte()?;
         let cel_type = chunk.word()?;
         chunk.skip(2 + 5)?;
-        let layer = match self.layer_slots.get(aseprite_layer) {
-            Some(LayerSlot::Spry(index)) => *index,
-            Some(LayerSlot::Group) => return Ok(()),
-            None => bail!("a cel refers to layer {aseprite_layer}, which doesn't exist"),
-        };
-        match cel_type {
+        let id = *self
+            .layer_slots
+            .get(aseprite_layer)
+            .with_context(|| format!("a cel refers to layer {aseprite_layer}, which doesn't exist"))?;
+        let layer = self.sprite.layer_index(id).expect("slots point at layers in the sprite");
+        ensure!(!self.sprite.layers[layer].is_group(), "a cel is on a group, which can't hold pixels");
+        let patch = match cel_type {
             0 | 2 => {
                 let (width, height) = (u32::from(chunk.word()?), u32::from(chunk.word()?));
-                let data = if cel_type == 0 {
-                    chunk.rest().to_vec()
-                } else {
-                    let expected = width as usize * height as usize * self.depth.bytes_per_pixel();
-                    inflate(chunk.rest(), expected)?
-                };
-                let patch = self.pixels_from(&data, width, height, opacity)?;
-                let mut image = Pixels::new(self.sprite.width, self.sprite.height);
-                image.stamp(&patch, x, y, 255);
-                let id = self.sprite.add_image(image);
-                self.sprite.layers[layer].cels[frame] = Some(id);
+                let expected = width as usize * height as usize * self.depth.bytes_per_pixel();
+                let data = if cel_type == 0 { chunk.rest().to_vec() } else { inflate(chunk.rest(), expected)? };
+                self.pixels_from(&data, width, height)?
             }
             1 => {
                 let source = chunk.word()? as usize;
                 ensure!(source < frame, "a linked cel points at frame {source}, which comes later");
-                self.sprite.layers[layer].cels[frame] = self.sprite.layers[layer].cels[source];
+                // A linked cel shares the image but has its own opacity.
+                let shared = self.sprite.layers[layer].cels[source];
+                self.sprite.layers[layer].cels[frame] = shared.map(|cel| Cel { opacity, ..cel });
+                return Ok(());
             }
-            3 => {} // Tilemap cels: already reported with their layer.
+            3 => self.tilemap_pixels(chunk, id)?,
             other => bail!("unknown cel type {other}"),
-        }
+        };
+        let mut image = Pixels::new(self.sprite.width, self.sprite.height);
+        image.stamp(&patch, x, y, 255);
+        let image = self.sprite.add_image(image);
+        self.sprite.layers[layer].cels[frame] = Some(Cel { image, opacity });
         Ok(())
     }
 
-    /// Turns a cel's raw bytes into pixels in Spry's RGBA, baking in the
-    /// cel's opacity since Spry cels don't carry one.
-    fn pixels_from(&self, data: &[u8], width: u32, height: u32, opacity: u8) -> Result<Pixels> {
+    /// Draws a tilemap cel out of its tileset: each 32-bit entry names a
+    /// tile (0 is the empty tile) and may flip it.
+    fn tilemap_pixels(&self, chunk: &mut Reader, layer: LayerId) -> Result<Pixels> {
+        let (columns, rows) = (u32::from(chunk.word()?), u32::from(chunk.word()?));
+        let bits = chunk.word()?;
+        ensure!(bits == 32, "tilemaps with {bits}-bit tiles aren't in the spec Spry follows");
+        let (id_mask, x_flip, y_flip, diagonal_flip) = (chunk.dword()?, chunk.dword()?, chunk.dword()?, chunk.dword()?);
+        chunk.skip(10)?;
+        let tileset_id = self.tilemap_layers.get(&layer).context("a tilemap cel is on a layer that isn't a tilemap")?;
+        let tileset = self.tilesets.get(tileset_id).with_context(|| format!("tileset {tileset_id} is missing"))?;
+        let (width, height) = (columns * tileset.tile_width, rows * tileset.tile_height);
+        check_canvas_size(width.max(1), height.max(1)).map_err(anyhow::Error::msg)?;
+        let entries = inflate(chunk.rest(), columns as usize * rows as usize * 4)?;
+        let mut out = Pixels::new(width, height);
+        for (position, entry) in entries.chunks_exact(4).enumerate() {
+            let entry = u32::from_le_bytes([entry[0], entry[1], entry[2], entry[3]]);
+            let Some(tile) = tileset.tiles.get((entry & id_mask) as usize).filter(|_| entry & id_mask != 0) else {
+                continue;
+            };
+            let mut tile = tile.clone();
+            if entry & diagonal_flip != 0 {
+                tile = tile.rotated_clockwise().flipped_horizontally();
+            }
+            if entry & x_flip != 0 {
+                tile = tile.flipped_horizontally();
+            }
+            if entry & y_flip != 0 {
+                tile = tile.flipped_vertically();
+            }
+            let (column, row) = (position as u32 % columns.max(1), position as u32 / columns.max(1));
+            out.paste(&tile, (column * tileset.tile_width) as i32, (row * tileset.tile_height) as i32);
+        }
+        Ok(out)
+    }
+
+    fn read_tileset(&mut self, chunk: &mut Reader) -> Result<()> {
+        let id = chunk.dword()?;
+        let flags = chunk.dword()?;
+        let count = chunk.dword()?;
+        let (tile_width, tile_height) = (u32::from(chunk.word()?), u32::from(chunk.word()?));
+        chunk.skip(2 + 14)?;
+        let name = chunk.string()?;
+        ensure!(count <= MAX_TILES, "tileset \"{name}\" claims {count} tiles");
+        if flags & 1 != 0 {
+            chunk.skip(8)?;
+        }
+        if flags & TILESET_HAS_PIXELS == 0 {
+            bail!("tileset \"{name}\" lives in another file, which Spry can't follow");
+        }
+        let length = chunk.dword()? as usize;
+        let strip_height = tile_height.checked_mul(count).context("tileset is too large")?;
+        check_canvas_size(tile_width.max(1), strip_height.max(1)).map_err(anyhow::Error::msg)?;
+        let expected = tile_width as usize * strip_height as usize * self.depth.bytes_per_pixel();
+        let strip = self.pixels_from(&inflate(chunk.take(length)?, expected)?, tile_width, strip_height)?;
+        let tiles = (0..count)
+            .map(|tile| strip.crop(Rect::new(0, (tile * tile_height) as i32, tile_width, tile_height)))
+            .collect();
+        self.tilesets.insert(id, Tileset { tile_width, tile_height, tiles });
+        Ok(())
+    }
+
+    /// Turns a cel's raw bytes into pixels in Spry's RGBA.
+    fn pixels_from(&self, data: &[u8], width: u32, height: u32) -> Result<Pixels> {
         check_canvas_size(width.max(1), height.max(1)).map_err(anyhow::Error::msg)?;
         let needed = width as usize * height as usize * self.depth.bytes_per_pixel();
         ensure!(data.len() >= needed, "a cel has fewer pixels than its size says");
@@ -249,8 +337,7 @@ impl Decoder {
                 ColourDepth::Indexed { transparent } if raw[0] == transparent => Rgba::TRANSPARENT,
                 ColourDepth::Indexed { .. } => self.palette.get(raw[0] as usize).copied().unwrap_or(Rgba::TRANSPARENT),
             };
-            let alpha = (u16::from(colour.a()) * u16::from(opacity) / 255) as u8;
-            pixels.set(x, y, if colour.is_transparent() { colour } else { colour.with_alpha(alpha) });
+            pixels.set(x, y, colour);
         }
         Ok(pixels)
     }
@@ -307,6 +394,7 @@ impl Decoder {
 
     fn finish(mut self) -> Result<Import> {
         self.sprite.tags = std::mem::take(&mut self.tags);
+        self.sprite.tidy_layers();
         if self.sprite.layers.is_empty() {
             self.sprite.insert_layer(0, "Layer 1");
         }
