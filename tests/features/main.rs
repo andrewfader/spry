@@ -20,4 +20,5 @@ mod palette;
 mod previews;
 mod selection;
 mod sprite_sheets;
+mod tilesets;
 mod versioning;

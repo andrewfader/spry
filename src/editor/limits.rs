@@ -80,12 +80,24 @@ pub fn check(command: &Command, canvas_width: u32, canvas_height: u32) -> Result
         Command::MoveFloating { dx, dy } | Command::DropShadow { dx, dy, .. } => check_offset(*dx, *dy),
         Command::Paste { at: Some(at) } => reach.check(*at),
         Command::SelectLasso { points, .. } => points.iter().try_for_each(|&point| reach.check(point)),
+        Command::AddTilemapLayer { tile_width, tile_height, .. }
+        | Command::ConvertToTilemap { tile_width, tile_height } => check_tile_size(*tile_width, *tile_height),
+        Command::PlaceTile { at, .. } => reach.check(*at),
         Command::ImportLayer { image, .. } => check_canvas_size(image.width(), image.height()),
         Command::ResizeCanvas { width, height, offset_x, offset_y } => {
             check_canvas_size(*width, *height)?;
             check_offset(*offset_x, *offset_y)
         }
         _ => Ok(()),
+    }
+}
+
+pub fn check_tile_size(width: u32, height: u32) -> Result<(), String> {
+    let side = 1..=super::tilemap::MAX_TILE_SIDE;
+    if side.contains(&width) && side.contains(&height) {
+        Ok(())
+    } else {
+        Err(format!("tiles run from 1 to {} pixels a side, not {width}×{height}", super::tilemap::MAX_TILE_SIDE))
     }
 }
 

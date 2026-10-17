@@ -66,8 +66,9 @@ impl Scenario {
         self.cel_pixel(editor.layer, editor.frame, x, y)
     }
 
+    /// What a cel shows at (x, y): a tilemap's tiles are drawn out.
     pub fn cel_pixel(&self, layer: usize, frame: usize, x: i32, y: i32) -> Rgba {
-        self.sprite().cel_image(LayerIndex(layer), FrameIndex(frame)).map_or(CLEAR, |image| image.get(x, y))
+        self.sprite().cel_pixels(LayerIndex(layer), FrameIndex(frame)).get(x, y)
     }
 
     pub fn composite_pixel(&self, frame: usize, x: i32, y: i32) -> Rgba {

@@ -22,6 +22,7 @@ pub mod rotsprite;
 pub mod selection;
 pub mod session;
 pub mod sprite;
+pub mod tilemap;
 
 pub use blend::BlendMode;
 pub use color::Rgba;

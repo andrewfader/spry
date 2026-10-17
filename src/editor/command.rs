@@ -253,6 +253,37 @@ pub enum Command {
         index: usize,
     },
 
+    // ----- tilesets -----------------------------------------------------
+    /// Adds a tilemap layer above the current one. It paints with
+    /// `tileset` (an id from an earlier tileset), or a new empty tileset of
+    /// `tile_width` × `tile_height` tiles when no tileset is given.
+    AddTilemapLayer {
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        tileset: Option<u32>,
+        #[serde(default = "default_tile_side")]
+        tile_width: u32,
+        #[serde(default = "default_tile_side")]
+        tile_height: u32,
+    },
+    /// Cuts the current image layer into tiles: it becomes a tilemap layer
+    /// with a new tileset holding each distinct tile once.
+    ConvertToTilemap {
+        tile_width: u32,
+        tile_height: u32,
+    },
+    /// Puts tile `tile` (0 clears the cell) in the cell of the current
+    /// tilemap layer that contains `at`.
+    PlaceTile {
+        at: Point,
+        tile: u32,
+        #[serde(default)]
+        flip_x: bool,
+        #[serde(default)]
+        flip_y: bool,
+    },
+
     // ----- frames, clones and tags --------------------------------------
     AddFrame,
     DuplicateFrame {
@@ -351,6 +382,10 @@ pub enum Command {
 
 fn yes() -> bool {
     true
+}
+
+fn default_tile_side() -> u32 {
+    16
 }
 
 impl Command {

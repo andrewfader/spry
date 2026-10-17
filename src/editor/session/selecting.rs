@@ -102,10 +102,11 @@ impl Editor {
             return Ok("deleted the floating pixels".into());
         }
         let selection = self.selection.clone().ok_or(EditError::NothingSelected)?;
-        let image = self.document.sprite.cel_image_mut(LayerIndex(self.layer), FrameIndex(self.frame));
-        for (x, y) in selection.points() {
-            image.set(x, y, Rgba::TRANSPARENT);
-        }
+        self.edit_current_cel(|image| {
+            for (x, y) in selection.points() {
+                image.set(x, y, Rgba::TRANSPARENT);
+            }
+        });
         Ok("cleared the selection".into())
     }
 
@@ -131,10 +132,11 @@ impl Editor {
         let selection = self.selection.clone().ok_or(EditError::NothingSelected)?;
         let image = self.current_image_or_blank();
         let (pixels, bounds) = selection.extract(&image).ok_or(EditError::NothingSelected)?;
-        let cel = self.document.sprite.cel_image_mut(LayerIndex(self.layer), FrameIndex(self.frame));
-        for (x, y) in selection.points() {
-            cel.set(x, y, Rgba::TRANSPARENT);
-        }
+        self.edit_current_cel(|cel| {
+            for (x, y) in selection.points() {
+                cel.set(x, y, Rgba::TRANSPARENT);
+            }
+        });
         self.floating = Some(Floating { pixels, x: bounds.x, y: bounds.y });
         self.selection = None;
         Ok("lifted the selection".into())
@@ -145,13 +147,7 @@ impl Editor {
     /// whether anything was floating.
     pub fn anchor_floating(&mut self) -> bool {
         let Some(floating) = self.floating.take() else { return false };
-        let opacity = 255;
-        self.document.sprite.cel_image_mut(LayerIndex(self.layer), FrameIndex(self.frame)).stamp(
-            &floating.pixels,
-            floating.x,
-            floating.y,
-            opacity,
-        );
+        self.edit_current_cel(|cel| cel.stamp(&floating.pixels, floating.x, floating.y, 255));
         let landed = floating.bounds().intersect(&self.sprite().bounds());
         self.selection =
             (!landed.is_empty()).then(|| Selection::from_rect(self.sprite().width, self.sprite().height, landed));
@@ -195,8 +191,7 @@ impl Editor {
         let turned = turn(&image);
         let offset_x = (image.width() as i32 - turned.width() as i32) / 2;
         let offset_y = (image.height() as i32 - turned.height() as i32) / 2;
-        *self.document.sprite.cel_image_mut(LayerIndex(self.layer), FrameIndex(self.frame)) =
-            turned.resized_canvas(image.width(), image.height(), offset_x, offset_y);
+        self.write_current_cel(turned.resized_canvas(image.width(), image.height(), offset_x, offset_y));
         Ok(summary.to_string())
     }
 }

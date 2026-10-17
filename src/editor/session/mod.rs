@@ -15,6 +15,7 @@ mod frames;
 mod layers;
 mod painting;
 mod selecting;
+mod tiles;
 mod whole_sprite;
 
 use super::color::Rgba;
@@ -371,7 +372,7 @@ impl Editor {
         let points = self.footprint(&path, brush);
         let mut image = before.clone();
         self.paint_points(&mut image, &before, &points, ink);
-        *self.document.sprite.cel_image_mut(LayerIndex(self.layer), FrameIndex(self.frame)) = image;
+        self.write_current_cel(image);
         self.revision += 1;
     }
 
@@ -383,12 +384,7 @@ impl Editor {
     /// step behind.
     pub fn finish_stroke(&mut self) {
         let Some(stroke) = self.stroke.take() else { return };
-        let unchanged = self.sprite().cel_image(LayerIndex(self.layer), FrameIndex(self.frame)) == Some(&stroke.before)
-            || (stroke.before.is_blank()
-                && self
-                    .sprite()
-                    .cel_image(LayerIndex(self.layer), FrameIndex(self.frame))
-                    .is_none_or(Pixels::is_blank));
+        let unchanged = self.current_image_or_blank() == stroke.before;
         if unchanged {
             self.redo_stack = stroke.redo_before;
             if stroke.pushed_undo {
@@ -460,6 +456,12 @@ impl Editor {
             Command::SetLayerBlend { blend } => self.set_layer_blend(blend),
             Command::SetCelOpacity { opacity } => self.set_cel_opacity(opacity),
             Command::SelectLayer { index } => self.select_layer(index),
+
+            Command::AddTilemapLayer { name, tileset, tile_width, tile_height } => {
+                self.add_tilemap_layer(name, tileset, tile_width, tile_height)
+            }
+            Command::ConvertToTilemap { tile_width, tile_height } => self.convert_to_tilemap(tile_width, tile_height),
+            Command::PlaceTile { at, tile, flip_x, flip_y } => self.place_tile(at, tile, flip_x, flip_y),
             Command::SelectFrame { index } => self.select_frame(index),
 
             Command::AddFrame => self.add_frame(),
@@ -543,11 +545,26 @@ impl Editor {
         Ok(())
     }
 
+    /// The current cel as pixels; a tilemap's tiles are drawn out.
     fn current_image_or_blank(&self) -> Pixels {
-        self.sprite()
-            .cel_image(LayerIndex(self.layer), FrameIndex(self.frame))
-            .cloned()
-            .unwrap_or_else(|| Pixels::new(self.sprite().width, self.sprite().height))
+        self.sprite().cel_pixels(LayerIndex(self.layer), FrameIndex(self.frame))
+    }
+
+    /// Makes the current cel show `pixels`. On a tilemap layer this edits
+    /// the tiles under the changed pixels.
+    fn write_current_cel(&mut self, pixels: Pixels) {
+        self.document.sprite.write_cel_pixels(LayerIndex(self.layer), FrameIndex(self.frame), pixels);
+    }
+
+    /// Reads the current cel, lets `change` edit it, and writes it back if
+    /// anything changed.
+    fn edit_current_cel(&mut self, change: impl FnOnce(&mut Pixels)) {
+        let before = self.current_image_or_blank();
+        let mut after = before.clone();
+        change(&mut after);
+        if after != before {
+            self.write_current_cel(after);
+        }
     }
 
     /// Grows a path into the brush footprint, mirrored by the symmetry
@@ -558,10 +575,7 @@ impl Editor {
         let sprite = self.sprite();
         match self.floating.as_ref().filter(|_| frame == self.frame) {
             Some(floating) => {
-                let mut with_floating = sprite
-                    .cel_image(LayerIndex(self.layer), FrameIndex(frame))
-                    .cloned()
-                    .unwrap_or_else(|| Pixels::new(sprite.width, sprite.height));
+                let mut with_floating = sprite.cel_pixels(LayerIndex(self.layer), FrameIndex(frame));
                 with_floating.stamp(&floating.pixels, floating.x, floating.y, 255);
                 sprite.composite_with(frame, Some((self.layer, &with_floating)))
             }

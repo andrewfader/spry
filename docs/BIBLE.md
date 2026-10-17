@@ -328,3 +328,29 @@ opens them (the published file spec) as new, unsaved documents.
   becomes transparent and every other index takes its palette colour.
 - Given a truncated or corrupt file, when I open it, then I get an error
   saying so, never a crash.
+
+### 21. Tilesets and tilemaps (`tilesets.rs`)
+Level art and repeating sprites are built from tiles: draw a tile once, place
+it many times, and fixing it fixes every copy.
+- A tileset is a list of same-sized tiles; tile 0 is the empty tile. A
+  tilemap layer paints with one tileset: each cel is a grid of tile
+  references, each optionally flipped. As in Aseprite, the grid is stored
+  as a tiny image of 32-bit references, so clones, undo, versions and files
+  just work.
+- Every drawing tool works on a tilemap layer: the pixels are drawn out,
+  changed, and written back. A changed cell edits its tile (every copy
+  updates); painting an empty cell makes a new tile, or reuses an identical
+  one; erasing a whole cell clears it.
+- Convert an image layer into a tilemap: identical tiles are stored once.
+- The Tile tool places the chosen tile in the clicked cell (right-click
+  clears it). The canvas shows the tile grid on a tilemap layer.
+- Export a tileset as a PNG strip plus JSON with every tilemap's grid
+  (Tiled-style tile numbers, with Aseprite's flip bits).
+- Aseprite tilemap layers open as real tilemap layers with their tilesets.
+- Given an image layer of two identical 8×8 tiles side by side, when I
+  convert it, then its tileset holds one tile plus the empty tile, and it
+  looks the same as before.
+- Given a converted tilemap, when I paint one copy of a tile, then the
+  other copy changes too, and one undo puts both back.
+- Given a tilemap layer, when I place tile 1 at (12, 3) with 8×8 tiles,
+  then cell (1, 0) shows tile 1.

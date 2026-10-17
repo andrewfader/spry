@@ -21,6 +21,7 @@ use super::blend::BlendMode;
 use super::color::Rgba;
 use super::palette::Palette;
 use super::pixels::{Pixels, Rect};
+use super::tilemap::{Tileset, TilesetId};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -81,6 +82,9 @@ pub enum LayerKind {
     Image,
     /// Holds other layers (those whose `parent` is this one) and no pixels.
     Group,
+    /// Paints with the tiles of a tileset; each cel is a grid of tiles
+    /// (see `tilemap.rs`).
+    Tilemap { tileset: TilesetId },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -156,6 +160,8 @@ pub struct Sprite {
     pub frames: Vec<Frame>,
     pub images: BTreeMap<ImageId, Arc<Pixels>>,
     pub tags: Vec<Tag>,
+    #[serde(default)]
+    pub tilesets: Vec<Tileset>,
     pub slices: Vec<Slice>,
     pub notes: String,
     pub pins: Vec<Pin>,
@@ -182,6 +188,7 @@ impl Sprite {
             frames: vec![Frame { duration_ms: DEFAULT_FRAME_MS, note: String::new() }],
             images: BTreeMap::new(),
             tags: Vec::new(),
+            tilesets: Vec::new(),
             slices: Vec::new(),
             notes: String::new(),
             pins: Vec::new(),
@@ -225,7 +232,8 @@ impl Sprite {
                 return Err(format!("group \"{}\" has pixels of its own", layer.name));
             }
         }
-        for (id, image) in &self.images {
+        let grids = self.grid_images();
+        for (id, image) in self.images.iter().filter(|(id, _)| !grids.contains(id)) {
             if (image.width(), image.height()) != (self.width, self.height) {
                 return Err(format!(
                     "image {} is {}×{} on a {}×{} canvas",
@@ -243,7 +251,8 @@ impl Sprite {
         if let Some(tag) = self.tags.iter().find(|t| t.from > t.to || t.to >= self.frames.len()) {
             return Err(format!("tag \"{}\" runs past the last frame", tag.name));
         }
-        self.validate_groups()
+        self.validate_groups()?;
+        self.validate_tilemaps()
     }
 
     pub fn bounds(&self) -> Rect {
@@ -312,7 +321,8 @@ impl Sprite {
             return false;
         }
         let (upper, lower) = (&self.layers[index], &self.layers[index - 1]);
-        if upper.is_group() || lower.is_group() || upper.parent != lower.parent {
+        let picture = |layer: &Layer| layer.kind == LayerKind::Image;
+        if !picture(upper) || !picture(lower) || upper.parent != lower.parent {
             return false;
         }
         let upper = self.layers.remove(index);
@@ -517,7 +527,8 @@ impl Sprite {
     /// Changes the canvas size. Every image keeps its pixels, shifted by the
     /// offset. Anything that falls outside is cropped.
     pub fn resize_canvas(&mut self, width: u32, height: u32, offset_x: i32, offset_y: i32) {
-        for image in self.images.values_mut() {
+        let grids = self.grid_images();
+        for (_, image) in self.images.iter_mut().filter(|(id, _)| !grids.contains(id)) {
             *image = Arc::new(image.resized_canvas(width, height, offset_x, offset_y));
         }
         for pin in &mut self.pins {
@@ -530,6 +541,7 @@ impl Sprite {
         }
         self.width = width;
         self.height = height;
+        self.resize_tilemaps(offset_x, offset_y);
     }
 
     /// Flattens every visible layer of a frame into one image.
@@ -558,13 +570,22 @@ impl Sprite {
                 out.stamp_blended(&inside, 0, 0, layer.opacity, layer.blend);
                 continue;
             }
-            let cel_opacity = self.cel(LayerIndex(index), FrameIndex(frame)).map_or(255, |cel| cel.opacity);
-            let image = match stand_in {
-                Some((stand_in_layer, image)) if stand_in_layer == index => Some(image),
-                _ => self.cel_image(LayerIndex(index), FrameIndex(frame)),
-            };
-            if let Some(image) = image {
-                out.stamp_blended(image, 0, 0, mul_opacity(layer.opacity, cel_opacity), layer.blend);
+            let (layer_index, frame_index) = (LayerIndex(index), FrameIndex(frame));
+            let cel_opacity = self.cel(layer_index, frame_index).map_or(255, |cel| cel.opacity);
+            let opacity = mul_opacity(layer.opacity, cel_opacity);
+            match stand_in {
+                Some((stand_in_layer, image)) if stand_in_layer == index => {
+                    out.stamp_blended(image, 0, 0, opacity, layer.blend)
+                }
+                // A tilemap's cel is a grid of tiles, so draw the tiles.
+                _ if self.tilemap_of(layer_index).is_some() => {
+                    out.stamp_blended(&self.cel_pixels(layer_index, frame_index), 0, 0, opacity, layer.blend)
+                }
+                _ => {
+                    if let Some(image) = self.cel_image(layer_index, frame_index) {
+                        out.stamp_blended(image, 0, 0, opacity, layer.blend);
+                    }
+                }
             }
         }
         out
@@ -575,7 +596,10 @@ impl Sprite {
     pub fn used_colours(&self) -> Vec<Rgba> {
         let mut seen = std::collections::HashSet::new();
         let mut colours = Vec::new();
-        for image in self.images.values() {
+        let grids = self.grid_images();
+        let pictures = self.images.iter().filter(|(id, _)| !grids.contains(id)).map(|(_, image)| image);
+        let tiles = self.tilesets.iter().flat_map(|tileset| tileset.tiles.iter());
+        for image in pictures.chain(tiles) {
             for &colour in image.colours() {
                 if !colour.is_transparent() && seen.insert(colour) {
                     colours.push(colour);
@@ -585,10 +609,13 @@ impl Sprite {
         colours
     }
 
-    /// Replaces one exact colour with another in every image.
+    /// Replaces one exact colour with another in every image and tile.
     pub fn swap_colour(&mut self, from: Rgba, to: Rgba) -> usize {
         let mut changed = 0;
-        for image in self.images.values_mut() {
+        let grids = self.grid_images();
+        let pictures = self.images.iter_mut().filter(|(id, _)| !grids.contains(id)).map(|(_, image)| image);
+        let tiles = self.tilesets.iter_mut().flat_map(|tileset| tileset.tiles.iter_mut());
+        for image in pictures.chain(tiles) {
             if !image.colours().contains(&from) {
                 continue;
             }
