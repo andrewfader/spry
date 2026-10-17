@@ -73,6 +73,22 @@ pub struct Conversation {
     transcript: Vec<Value>,
 }
 
+/// What one turn is about: the user's words, the canvas as they see it, and
+/// how to run tools and report progress.
+struct Turn<'a> {
+    user_text: &'a str,
+    canvas: Option<&'a [u8]>,
+    execute: &'a mut dyn FnMut(&str, &Value) -> ToolResult,
+    on_event: &'a mut dyn FnMut(AgentEvent),
+}
+
+/// Where and as whom to reach Claude.
+struct ClaudeEndpoint<'a> {
+    api_key: &'a str,
+    model: &'a str,
+    base_url: &'a str,
+}
+
 impl Conversation {
     pub fn new(provider: Provider) -> Conversation {
         Conversation { provider, transcript: Vec::new() }
@@ -96,25 +112,20 @@ impl Conversation {
                 if api_key.trim().is_empty() {
                     bail!("add an Anthropic API key in Settings (or set ANTHROPIC_API_KEY) to use Claude");
                 }
-                self.claude_turn(&api_key, &model, &base_url, user_text, canvas, execute, on_event)
+                let endpoint = ClaudeEndpoint { api_key: &api_key, model: &model, base_url: &base_url };
+                self.claude_turn(endpoint, Turn { user_text, canvas, execute, on_event })
             }
-            Provider::Ollama { url, model } => self.ollama_turn(&url, &model, user_text, canvas, execute, on_event),
+            Provider::Ollama { url, model } => {
+                self.ollama_turn(&url, &model, Turn { user_text, canvas, execute, on_event })
+            }
         }
     }
 
     // ----- Claude ---------------------------------------------------------
 
-    #[allow(clippy::too_many_arguments)]
-    fn claude_turn(
-        &mut self,
-        api_key: &str,
-        model: &str,
-        base_url: &str,
-        user_text: &str,
-        canvas: Option<&[u8]>,
-        execute: &mut dyn FnMut(&str, &Value) -> ToolResult,
-        on_event: &mut dyn FnMut(AgentEvent),
-    ) -> Result<String> {
+    fn claude_turn(&mut self, endpoint: ClaudeEndpoint<'_>, turn: Turn<'_>) -> Result<String> {
+        let ClaudeEndpoint { api_key, model, base_url } = endpoint;
+        let Turn { user_text, canvas, execute, on_event } = turn;
         let mut content = Vec::new();
         if let Some(png) = canvas {
             content.push(claude_image(png));
@@ -189,15 +200,8 @@ impl Conversation {
 
     // ----- Ollama ---------------------------------------------------------
 
-    fn ollama_turn(
-        &mut self,
-        url: &str,
-        model: &str,
-        user_text: &str,
-        canvas: Option<&[u8]>,
-        execute: &mut dyn FnMut(&str, &Value) -> ToolResult,
-        on_event: &mut dyn FnMut(AgentEvent),
-    ) -> Result<String> {
+    fn ollama_turn(&mut self, url: &str, model: &str, turn: Turn<'_>) -> Result<String> {
+        let Turn { user_text, canvas, execute, on_event } = turn;
         if self.transcript.is_empty() {
             self.transcript.push(json!({ "role": "system", "content": SYSTEM_PROMPT }));
         }

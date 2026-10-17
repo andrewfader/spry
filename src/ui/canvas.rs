@@ -129,7 +129,8 @@ pub fn show(ui: &mut egui::Ui, input: CanvasInput<'_>) -> Vec<CanvasRequest> {
     paint_sprite(ui, studio, view, textures, appearance, &texture_prefix, canvas_rect);
     let panning = ui.input(|i| i.key_down(egui::Key::Space) || i.pointer.middle_down());
     if !panning {
-        handle_tool(ui, &response, studio, view, settings, to_pixel, &mut requests);
+        let pointer = PointerState::read(ui, &response, to_pixel);
+        handle_tool(pointer, studio, view, settings, &mut requests);
     }
     paint_overlays(ui, studio, view, settings, canvas_rect, to_screen, appearance);
     requests
@@ -236,29 +237,43 @@ fn paint_sprite(
     painter.image(current, canvas_rect, full_uv, Color32::WHITE);
 }
 
-#[allow(clippy::too_many_arguments)]
+/// The mouse this frame, in canvas pixels.
+#[derive(Clone, Copy)]
+struct PointerState {
+    at: Option<Point>,
+    over_canvas: bool,
+    pressed_primary: bool,
+    pressed_secondary: bool,
+    down: bool,
+    alt: bool,
+    shift: bool,
+}
+
+impl PointerState {
+    fn read(ui: &egui::Ui, response: &egui::Response, to_pixel: impl Fn(Pos2) -> Point) -> PointerState {
+        ui.input(|i| PointerState {
+            at: i.pointer.interact_pos().map(&to_pixel),
+            over_canvas: response.hovered(),
+            pressed_primary: i.pointer.button_pressed(egui::PointerButton::Primary),
+            pressed_secondary: i.pointer.button_pressed(egui::PointerButton::Secondary),
+            down: i.pointer.primary_down() || i.pointer.secondary_down(),
+            alt: i.modifiers.alt,
+            shift: i.modifiers.shift,
+        })
+    }
+}
+
 fn handle_tool(
-    ui: &egui::Ui,
-    response: &egui::Response,
+    input: PointerState,
     studio: &mut Studio,
     view: &mut CanvasView,
     settings: &mut ToolSettings,
-    to_pixel: impl Fn(Pos2) -> Point,
     requests: &mut Vec<CanvasRequest>,
 ) {
-    let (pressed_primary, pressed_secondary, alt, shift) = ui.input(|i| {
-        (
-            i.pointer.button_pressed(egui::PointerButton::Primary),
-            i.pointer.button_pressed(egui::PointerButton::Secondary),
-            i.modifiers.alt,
-            i.modifiers.shift,
-        )
-    });
-    let pointer = ui.input(|i| i.pointer.interact_pos()).map(&to_pixel);
-    let down = ui.input(|i| i.pointer.primary_down() || i.pointer.secondary_down());
+    let PointerState { at: pointer, over_canvas, pressed_primary, pressed_secondary, down, alt, shift } = input;
     let editor = &mut studio.editor;
 
-    if response.hovered() && (pressed_primary || pressed_secondary) {
+    if over_canvas && (pressed_primary || pressed_secondary) {
         let Some(at) = pointer else { return };
         let secondary = pressed_secondary;
         let tool = settings.tool;
