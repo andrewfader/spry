@@ -2,13 +2,14 @@
 //! sends `Action`s and editor `Command`s. None of them edits a document
 //! directly.
 
-use super::app::{Action, App, Panel};
+use super::app::{Action, App, Panel, ResizeDraft};
 use super::settings::ChatProvider;
 use super::theme::{self, Appearance};
 use super::tools::Tool;
 use super::workers::{ChatLine, DiffusionJob};
 use crate::ai::diffusion::{self, Generation, Landing};
 use crate::editor::dither::CLASSIC_PATTERNS;
+use crate::editor::limits::MAX_CANVAS_SIDE;
 use crate::editor::playback;
 use crate::editor::{Command, LoopDirection, Palette, Pattern, Rgba};
 use crate::io::{SheetLayout, SheetOptions};
@@ -185,9 +186,9 @@ impl App {
                             ("Select all   Ctrl+A", Action::Edit(Command::SelectAll)),
                             ("Deselect   Ctrl+D", Action::Edit(Command::SelectNone)),
                             ("Invert selection   Ctrl+Shift+I", Action::Edit(Command::InvertSelection)),
-                            ("Flip horizontal   H", Action::Edit(Command::FlipHorizontal)),
-                            ("Flip vertical", Action::Edit(Command::FlipVertical)),
-                            ("Rotate 90° clockwise   R", Action::Edit(Command::RotateClockwise)),
+                            ("Flip horizontal   Shift+H", Action::Edit(Command::FlipHorizontal)),
+                            ("Flip vertical   Shift+V", Action::Edit(Command::FlipVertical)),
+                            ("Rotate 90° clockwise   Shift+R", Action::Edit(Command::RotateClockwise)),
                             ("Rotate 90° counter-clockwise", Action::Edit(Command::RotateCounterClockwise)),
                             ("Canvas size…", Action::Toggle(Panel::ResizeCanvas)),
                         ] {
@@ -527,11 +528,24 @@ impl App {
             });
         }
         ui.separator();
-        let (mut name, _, _, mut opacity) = layers[current].clone();
+        let (saved_name, _, _, mut opacity) = layers[current].clone();
+        // The draft lives across frames; reading the name back from the
+        // document each frame would throw away every keystroke.
+        let mut name = match &self.layer_name_draft {
+            Some((layer, draft)) if *layer == current => draft.clone(),
+            _ => saved_name.clone(),
+        };
         ui.horizontal(|ui| {
             ui.label("Name");
-            if ui.text_edit_singleline(&mut name).lost_focus() && name != layers[current].0 {
-                commands.push(Command::RenameLayer { name: name.clone() });
+            let response = ui.text_edit_singleline(&mut name);
+            if response.changed() {
+                self.layer_name_draft = Some((current, name.clone()));
+            }
+            if response.lost_focus() {
+                if name != saved_name && !name.trim().is_empty() {
+                    commands.push(Command::RenameLayer { name: name.clone() });
+                }
+                self.layer_name_draft = None;
             }
         });
         ui.horizontal(|ui| {
@@ -635,7 +649,9 @@ impl App {
             ui.add(egui::Image::new((texture, size)));
         }
         ui.weak(format!("frame {} · {} ms", frame + 1, sprite.frames[frame].duration_ms));
-        ui.ctx().request_repaint_after(std::time::Duration::from_millis(16));
+        if let Some(wait) = playback::ms_until_next_frame(sprite, tag, elapsed) {
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(wait));
+        }
     }
 
     // ----- timeline -----------------------------------------------------
@@ -1062,7 +1078,9 @@ impl App {
                 dither: form.dither,
             };
             let wake = ctx.clone();
-            self.diffusion = Some(DiffusionJob::start(backend, generation, landing, move || wake.request_repaint()));
+            let document = self.document().id;
+            self.diffusion =
+                Some(DiffusionJob::start(document, backend, generation, landing, move || wake.request_repaint()));
             self.status = "Generating… the result arrives as a new layer, snapped to your palette".into();
         }
         if busy {
@@ -1292,38 +1310,33 @@ impl App {
     fn resize_panel(&mut self, ui: &mut egui::Ui) {
         let (old_w, old_h) = {
             let sprite = self.studio().editor.sprite();
-            (sprite.width as i32, sprite.height as i32)
+            (sprite.width, sprite.height)
         };
-        if self.resize.0 == 0 {
-            self.resize = (old_w as u32, old_h as u32, 0, 0);
-        }
+        let draft = self.resize.get_or_insert(ResizeDraft { width: old_w, height: old_h, column: 0, row: 0 });
         ui.horizontal(|ui| {
             ui.label("Width");
-            ui.add(egui::DragValue::new(&mut self.resize.0).range(1..=4096));
+            ui.add(egui::DragValue::new(&mut draft.width).range(1..=MAX_CANVAS_SIDE));
             ui.label("Height");
-            ui.add(egui::DragValue::new(&mut self.resize.1).range(1..=4096));
+            ui.add(egui::DragValue::new(&mut draft.height).range(1..=MAX_CANVAS_SIDE));
         });
         ui.label("Anchor");
         egui::Grid::new("anchor").show(ui, |ui| {
             for row in 0..3 {
                 for column in 0..3 {
-                    let offset_x = ((self.resize.0 as i32 - old_w) * column) / 2;
-                    let offset_y = ((self.resize.1 as i32 - old_h) * row) / 2;
-                    let chosen = (self.resize.2, self.resize.3) == (offset_x, offset_y);
+                    let chosen = (draft.column, draft.row) == (column, row);
                     if ui.selectable_label(chosen, "●").clicked() {
-                        self.resize.2 = offset_x;
-                        self.resize.3 = offset_y;
+                        (draft.column, draft.row) = (column, row);
                     }
                 }
                 ui.end_row();
             }
         });
         if ui.button("Resize").clicked() {
-            let (width, height, offset_x, offset_y) = self.resize;
+            let (offset_x, offset_y) = draft.offsets_from(old_w, old_h);
+            let (width, height) = (draft.width, draft.height);
             self.edit(Command::ResizeCanvas { width, height, offset_x, offset_y });
             self.document_mut().view.refit();
             self.open_panels.remove(&Panel::ResizeCanvas);
-            self.resize = (0, 0, 0, 0);
         }
     }
 

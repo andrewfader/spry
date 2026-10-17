@@ -54,6 +54,9 @@ pub struct FileBrowser {
     pub file_name: String,
     entries: Vec<(String, bool)>,
     error: Option<String>,
+    /// An existing file the user has been warned about. Choosing it a
+    /// second time replaces it.
+    confirm_replace: Option<PathBuf>,
 }
 
 pub enum BrowserOutcome {
@@ -64,8 +67,14 @@ pub enum BrowserOutcome {
 
 impl FileBrowser {
     pub fn new(purpose: Purpose, directory: PathBuf, suggested_name: &str) -> FileBrowser {
-        let mut browser =
-            FileBrowser { purpose, directory, file_name: suggested_name.to_string(), entries: Vec::new(), error: None };
+        let mut browser = FileBrowser {
+            purpose,
+            directory,
+            file_name: suggested_name.to_string(),
+            entries: Vec::new(),
+            error: None,
+            confirm_replace: None,
+        };
         browser.refresh();
         browser
     }
@@ -77,6 +86,7 @@ impl FileBrowser {
     pub fn show(&mut self, ctx: &egui::Context, frame: egui::Frame) -> BrowserOutcome {
         let mut outcome = BrowserOutcome::Open;
         let mut navigate_to: Option<PathBuf> = None;
+        let mut choose = false;
         egui::Window::new(self.purpose.title())
             .frame(frame)
             .collapsible(false)
@@ -112,7 +122,8 @@ impl FileBrowser {
                             }
                         }
                         if response.double_clicked() && !is_dir {
-                            outcome = BrowserOutcome::Chosen(self.directory.join(name));
+                            self.file_name = name.clone();
+                            choose = true;
                         }
                     }
                     if self.entries.is_empty() {
@@ -125,12 +136,13 @@ impl FileBrowser {
                         ui.label("Name");
                         ui.add(egui::TextEdit::singleline(&mut self.file_name).desired_width(260.0));
                     }
-                    let verb = if self.purpose.is_saving() { "Save" } else { "Open" };
+                    let verb = match (self.purpose.is_saving(), self.confirm_replace.is_some()) {
+                        (true, true) => "Replace",
+                        (true, false) => "Save",
+                        _ => "Open",
+                    };
                     if ui.button(verb).clicked() {
-                        match self.resolve() {
-                            Ok(path) => outcome = BrowserOutcome::Chosen(path),
-                            Err(error) => self.error = Some(error),
-                        }
+                        choose = true;
                     }
                     if ui.button("Cancel").clicked() {
                         outcome = BrowserOutcome::Cancelled;
@@ -140,11 +152,31 @@ impl FileBrowser {
                     ui.colored_label(egui::Color32::from_rgb(255, 120, 120), error);
                 }
             });
+        if choose {
+            match self.choose() {
+                Ok(Some(path)) => outcome = BrowserOutcome::Chosen(path),
+                Ok(None) => {}
+                Err(error) => self.error = Some(error),
+            }
+        }
         if let Some(directory) = navigate_to {
             self.directory = directory;
             self.refresh();
         }
         outcome
+    }
+
+    /// Settles on a path, or returns `None` after warning that the file
+    /// exists, so that replacing it takes a second, deliberate choice.
+    fn choose(&mut self) -> Result<Option<PathBuf>, String> {
+        let path = self.resolve()?;
+        let needs_warning = self.purpose.is_saving() && path.is_file() && self.confirm_replace.as_ref() != Some(&path);
+        if needs_warning {
+            self.error = Some(format!("{} already exists. Choose Replace to overwrite it.", path.display()));
+            self.confirm_replace = Some(path);
+            return Ok(None);
+        }
+        Ok(Some(path))
     }
 
     /// The chosen path, with the expected extension added when saving.
@@ -212,6 +244,22 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let browser = FileBrowser::new(Purpose::ExportGif, dir.path().to_path_buf(), "walk");
         assert_eq!(browser.resolve().unwrap(), dir.path().join("walk.gif"));
+    }
+
+    #[test]
+    fn saving_over_an_existing_file_takes_a_second_choice() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("hero.png"), b"precious").unwrap();
+        let mut browser = FileBrowser::new(Purpose::ExportPng, dir.path().to_path_buf(), "hero.png");
+        assert_eq!(browser.choose(), Ok(None), "the first choice only warns");
+        assert_eq!(browser.choose(), Ok(Some(dir.path().join("hero.png"))));
+    }
+
+    #[test]
+    fn saving_a_new_file_needs_no_warning() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut browser = FileBrowser::new(Purpose::ExportPng, dir.path().to_path_buf(), "fresh");
+        assert_eq!(browser.choose(), Ok(Some(dir.path().join("fresh.png"))));
     }
 
     #[test]

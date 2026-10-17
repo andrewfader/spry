@@ -16,6 +16,7 @@ use crate::editor::playback;
 use crate::editor::{Command, Palette};
 use crate::io::{self, SheetOptions};
 use crate::mcp::http::HttpBridge;
+use crate::mcp::Workspace;
 use crate::studio::Studio;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -98,6 +99,33 @@ pub enum Action {
     CommandPalette,
 }
 
+/// The new size, and which of the nine anchor cells (column and row, 0 to
+/// 2) the old picture keeps to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ResizeDraft {
+    pub width: u32,
+    pub height: u32,
+    pub column: i32,
+    pub row: i32,
+}
+
+impl ResizeDraft {
+    /// Where the old picture lands in the new canvas. Worked out at the
+    /// moment of resizing, so it always matches the final width and height.
+    pub fn offsets_from(&self, old_width: u32, old_height: u32) -> (i32, i32) {
+        let spare_x = self.width as i32 - old_width as i32;
+        let spare_y = self.height as i32 - old_height as i32;
+        (spare_x * self.column / 2, spare_y * self.row / 2)
+    }
+}
+
+/// What's waiting on an answer about unsaved work.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Closing {
+    Tab(u64),
+    Window,
+}
+
 pub struct App {
     pub documents: Vec<OpenDocument>,
     pub active: usize,
@@ -113,19 +141,26 @@ pub struct App {
     pub mcp: Option<HttpBridge>,
     pub mcp_error: Option<String>,
     pub agent: AgentWorker,
-    pub agent_turn_open: bool,
+    /// The document the assistant's current turn is working on, if a turn
+    /// is under way.
+    pub agent_turn: Option<u64>,
     pub chat_draft: String,
     pub diffusion: Option<DiffusionJob>,
     pub generate: super::panels::GenerateForm,
     pub sheet_options: SheetOptions,
     pub export_scale: u32,
     pub new_document: (u32, u32),
-    pub resize: (u32, u32, i32, i32),
+    /// The Canvas Size dialog's choices while it is open.
+    pub resize: Option<ResizeDraft>,
+    pub layer_name_draft: Option<(usize, String)>,
     pub palette_query: String,
     pub palette_open: bool,
     pub pending_pin: Option<(i32, i32, String)>,
     pub version_message: String,
     pub sheet_cell: (u32, u32),
+    pub closing: Option<Closing>,
+    /// Set once the user has chosen to quit and lose unsaved changes.
+    quit_confirmed: bool,
 }
 
 impl App {
@@ -148,19 +183,22 @@ impl App {
             mcp: None,
             mcp_error: None,
             agent,
-            agent_turn_open: false,
+            agent_turn: None,
             chat_draft: String::new(),
             diffusion: None,
             generate: super::panels::GenerateForm::default(),
             sheet_options: SheetOptions::default(),
             export_scale: 1,
             new_document: (32, 32),
-            resize: (32, 32, 0, 0),
+            resize: None,
+            layer_name_draft: None,
             palette_query: String::new(),
             palette_open: false,
             pending_pin: None,
             version_message: String::new(),
             sheet_cell: (16, 16),
+            closing: None,
+            quit_confirmed: false,
         };
         match initial.map(|path| Studio::open(&path).map(|studio| (studio, path))) {
             Some(Ok((studio, path))) => {
@@ -183,6 +221,10 @@ impl App {
         self.documents.push(OpenDocument { id: self.next_id, studio, view: CanvasView::default() });
         self.next_id += 1;
         self.active = self.documents.len() - 1;
+    }
+
+    pub fn index_of(&self, id: u64) -> Option<usize> {
+        self.documents.iter().position(|document| document.id == id)
     }
 
     pub fn document(&self) -> &OpenDocument {
@@ -233,7 +275,7 @@ impl App {
                 Some(_) => self.save_to(None),
                 None => self.browse(Purpose::SaveDocument, &format!("{}.spry", self.studio().title())),
             },
-            Action::SaveAs => self.browse(Purpose::SaveDocument, &format!("{}.spry", self.studio().title())),
+            Action::SaveAs => self.run_save_as(),
             Action::Close => self.close_active(),
             Action::ExportPng => self.browse(Purpose::ExportPng, &format!("{}.png", self.studio().title())),
             Action::ExportGif => self.browse(Purpose::ExportGif, &format!("{}.gif", self.studio().title())),
@@ -301,14 +343,108 @@ impl App {
         self.browser = Some(FileBrowser::new(purpose, directory, suggested));
     }
 
+    /// Closes the front tab, first asking about unsaved changes.
     fn close_active(&mut self) {
-        let prefix = self.document().texture_prefix();
+        let document = self.document();
+        if document.studio.editor.has_unsaved_changes() {
+            self.closing = Some(Closing::Tab(document.id));
+        } else {
+            self.close_tab(document.id);
+        }
+    }
+
+    fn close_tab(&mut self, id: u64) {
+        let Some(index) = self.index_of(id) else { return };
+        let prefix = self.documents[index].texture_prefix();
         self.textures.forget(&prefix);
-        self.documents.remove(self.active);
+        self.documents.remove(index);
         if self.documents.is_empty() {
             self.add_document(Studio::new(32, 32));
         }
         self.active = self.active.min(self.documents.len() - 1);
+    }
+
+    fn unsaved_titles(&self) -> Vec<String> {
+        self.documents
+            .iter()
+            .filter(|document| document.studio.editor.has_unsaved_changes())
+            .map(|document| document.studio.title())
+            .collect()
+    }
+
+    /// Stops the window closing while unsaved work would be lost, and asks
+    /// instead.
+    fn guard_window_close(&mut self, ctx: &egui::Context) {
+        let wants_to_close = ctx.input(|input| input.viewport().close_requested());
+        if wants_to_close && !self.quit_confirmed && !self.unsaved_titles().is_empty() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.closing = Some(Closing::Window);
+        }
+    }
+
+    fn show_close_dialog(&mut self, ctx: &egui::Context) {
+        let Some(closing) = self.closing else { return };
+        let question = match closing {
+            Closing::Tab(id) => match self.index_of(id) {
+                Some(index) => format!("Save changes to \"{}\" before closing?", self.documents[index].studio.title()),
+                None => {
+                    self.closing = None;
+                    return;
+                }
+            },
+            Closing::Window => format!("Unsaved changes in: {}", self.unsaved_titles().join(", ")),
+        };
+        let mut choice = None;
+        egui::Window::new("Unsaved changes")
+            .frame(self.glass())
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.label(question);
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if closing != Closing::Window && ui.button("Save").clicked() {
+                        choice = Some(CloseChoice::Save);
+                    }
+                    if ui.button("Discard changes").clicked() {
+                        choice = Some(CloseChoice::Discard);
+                    }
+                    if ui.button("Cancel").clicked() {
+                        choice = Some(CloseChoice::Cancel);
+                    }
+                });
+            });
+        let Some(choice) = choice else { return };
+        self.closing = None;
+        match (closing, choice) {
+            (_, CloseChoice::Cancel) => {}
+            (Closing::Tab(id), CloseChoice::Discard) => self.close_tab(id),
+            (Closing::Tab(id), CloseChoice::Save) => self.save_then_close(id),
+            (Closing::Window, _) => {
+                self.quit_confirmed = true;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+        }
+    }
+
+    /// Saves a tab that has a file and closes it. A tab that has never been
+    /// saved opens Save As instead, and stays open.
+    fn save_then_close(&mut self, id: u64) {
+        let Some(index) = self.index_of(id) else { return };
+        self.active = index;
+        if self.studio().path.is_none() {
+            self.run_save_as();
+            return;
+        }
+        self.save_to(None);
+        if !self.studio().editor.has_unsaved_changes() {
+            self.close_tab(id);
+        }
+    }
+
+    fn run_save_as(&mut self) {
+        self.browse(Purpose::SaveDocument, &format!("{}.spry", self.studio().title()));
     }
 
     fn save_to(&mut self, path: Option<&Path>) {
@@ -447,11 +583,13 @@ impl App {
         self.mcp = None;
     }
 
+    /// External MCP clients work on whichever document is in front.
     fn answer_mcp(&mut self) {
         let Some(bridge) = &self.mcp else { return };
         let pending: Vec<_> = bridge.messages.try_iter().collect();
         for message in pending {
-            let reply = crate::mcp::handle(&mut self.documents[self.active].studio, &message.message);
+            let target = self.document().id;
+            let reply = crate::mcp::handle(&mut Tabs { app: self, target, in_undo_group: false }, &message.message);
             message.answer(reply);
         }
     }
@@ -465,20 +603,29 @@ impl App {
         let scale = (512 / sprite.width.max(sprite.height)).clamp(1, 16);
         let canvas = io::encode_png(&editor.composite_for_display(editor.frame).scaled_up(scale)).ok();
         self.studio_mut().editor.begin_undo_group();
-        self.agent_turn_open = true;
+        self.agent_turn = Some(self.document().id);
         let wake = ctx.clone();
         self.agent.send(text, canvas, move || wake.request_repaint());
     }
 
+    /// The assistant's tools work on the document its turn started on, even
+    /// if you switch tabs while it thinks.
     fn run_agent_tools(&mut self) {
         for request in self.agent.drain() {
-            let result =
-                crate::mcp::tools::call(&mut self.documents[self.active].studio, &request.name, &request.arguments);
+            let Some(target) = self.agent_turn.filter(|&id| self.index_of(id).is_some()) else {
+                request.answer(Err("the document this turn was working on has been closed".into()));
+                continue;
+            };
+            let mut tabs = Tabs { app: self, target, in_undo_group: true };
+            let result = crate::mcp::tools::call(&mut tabs, &request.name, &request.arguments);
+            self.agent_turn = Some(tabs.target);
             request.answer(result);
         }
-        if self.agent_turn_open && self.agent.is_idle() {
-            self.studio_mut().editor.end_undo_group();
-            self.agent_turn_open = false;
+        if let Some(target) = self.agent_turn.filter(|_| self.agent.is_idle()) {
+            if let Some(index) = self.index_of(target) {
+                self.documents[index].studio.editor.end_undo_group();
+            }
+            self.agent_turn = None;
             self.status = "The assistant finished; Ctrl+Z undoes its whole turn".into();
         }
     }
@@ -486,12 +633,20 @@ impl App {
     fn collect_generation(&mut self) {
         let Some(job) = &self.diffusion else { return };
         let Some(result) = job.poll() else { return };
-        let prompt = job.prompt.clone();
+        let (prompt, target) = (job.prompt.clone(), job.document);
         self.diffusion = None;
+        let Some(index) = self.index_of(target) else {
+            self.status = "A generation finished, but its document has been closed".into();
+            return;
+        };
         match result {
             Ok(image) => {
                 let name: String = format!("✨ {}", prompt.chars().take(24).collect::<String>());
-                self.edit(Command::ImportLayer { name, image });
+                let outcome = self.documents[index].studio.editor.execute(Command::ImportLayer { name, image });
+                self.status = match outcome {
+                    Ok(summary) => capitalise(&summary),
+                    Err(error) => capitalise(&error.to_string()),
+                };
             }
             Err(error) => self.status = format!("Generation failed: {error}"),
         }
@@ -539,6 +694,20 @@ impl App {
         // Single keys only when no text field has focus.
         if !ctx.wants_keyboard_input() {
             ctx.input(|input| {
+                // Whole-cel transforms are easy to hit by accident, so like
+                // Aseprite they need Shift.
+                if input.modifiers.matches_exact(Modifiers::SHIFT) {
+                    let shifted = [
+                        (Key::H, Action::Edit(Command::FlipHorizontal)),
+                        (Key::V, Action::Edit(Command::FlipVertical)),
+                        (Key::R, Action::Edit(Command::RotateClockwise)),
+                    ];
+                    for (key, action) in shifted {
+                        if input.key_pressed(key) {
+                            triggered.push(action);
+                        }
+                    }
+                }
                 if input.modifiers.any() {
                     return;
                 }
@@ -553,8 +722,6 @@ impl App {
                     (Key::Delete, Action::Edit(Command::DeleteSelection)),
                     (Key::Backspace, Action::Edit(Command::DeleteSelection)),
                     (Key::Escape, Action::Edit(Command::Anchor)),
-                    (Key::H, Action::Edit(Command::FlipHorizontal)),
-                    (Key::R, Action::Edit(Command::RotateClockwise)),
                     (Key::Comma, Action::PreviousFrame),
                     (Key::Period, Action::NextFrame),
                     (Key::Tab, Action::ToggleOnionSkin),
@@ -593,16 +760,56 @@ impl App {
         let editor = &mut self.documents[self.active].studio.editor;
         let tag = tag_name.as_deref().and_then(|name| editor.sprite().tags.iter().find(|t| t.name == name));
         let frame = playback::frame_at(editor.sprite(), tag, elapsed);
+        let wait = playback::ms_until_next_frame(editor.sprite(), tag, elapsed);
         if frame != editor.frame {
             let _ = editor.execute(Command::SelectFrame { index: frame });
         }
-        ctx.request_repaint_after(std::time::Duration::from_millis(10));
+        if let Some(wait) = wait {
+            ctx.request_repaint_after(std::time::Duration::from_millis(wait));
+        }
     }
 
     pub fn window_title(&self) -> String {
         let studio = self.studio();
         let dirty = if studio.editor.has_unsaved_changes() { " •" } else { "" };
         format!("{}{dirty} — Spry", studio.title())
+    }
+}
+
+#[derive(Clone, Copy)]
+enum CloseChoice {
+    Save,
+    Discard,
+    Cancel,
+}
+
+/// The app's tabs as an MCP workspace. Tools work on the `target`
+/// document, and a document an AI creates or opens arrives in a new tab
+/// instead of replacing the one you were working on.
+struct Tabs<'a> {
+    app: &'a mut App,
+    target: u64,
+    /// Whether the target is inside an AI turn's undo group, which then
+    /// moves with it to the new document.
+    in_undo_group: bool,
+}
+
+impl Workspace for Tabs<'_> {
+    fn studio(&mut self) -> &mut Studio {
+        // Callers check the target is still open before each call.
+        let index = self.app.index_of(self.target).unwrap_or(self.app.active);
+        &mut self.app.documents[index].studio
+    }
+
+    fn open(&mut self, studio: Studio) {
+        if self.in_undo_group {
+            self.studio().editor.end_undo_group();
+        }
+        self.app.add_document(studio);
+        self.target = self.app.document().id;
+        if self.in_undo_group {
+            self.studio().editor.begin_undo_group();
+        }
     }
 }
 
@@ -617,6 +824,7 @@ pub fn capitalise(text: &str) -> String {
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.guard_window_close(ctx);
         self.answer_mcp();
         self.run_agent_tools();
         self.collect_generation();
@@ -652,6 +860,10 @@ impl eframe::App for App {
         });
 
         self.show_panels(ctx);
+        self.show_close_dialog(ctx);
+        if !self.is_open(Panel::ResizeCanvas) {
+            self.resize = None;
+        }
 
         if let Some(browser) = &mut self.browser {
             let purpose = browser.purpose;
@@ -664,8 +876,10 @@ impl eframe::App for App {
                 }
             }
         }
-        if ctx.input(|i| i.pointer.any_down()) || self.agent.busy || self.diffusion.is_some() {
-            ctx.request_repaint_after(std::time::Duration::from_millis(30));
+        // Workers wake the UI when they finish; this only keeps spinners
+        // turning, so a slow tick is plenty on a machine doing other work.
+        if self.agent.busy || self.diffusion.is_some() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
     }
 
@@ -677,6 +891,19 @@ impl eframe::App for App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_centred_anchor_splits_the_new_space_evenly() {
+        let draft = ResizeDraft { width: 48, height: 16, column: 1, row: 1 };
+        assert_eq!(draft.offsets_from(32, 32), (8, -8));
+    }
+
+    #[test]
+    fn the_anchor_follows_a_size_typed_after_it_was_chosen() {
+        let mut draft = ResizeDraft { width: 32, height: 32, column: 2, row: 2 };
+        draft.width = 40;
+        assert_eq!(draft.offsets_from(32, 32), (8, 0));
+    }
 
     #[test]
     fn status_messages_start_with_a_capital() {

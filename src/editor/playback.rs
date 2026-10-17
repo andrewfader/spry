@@ -51,9 +51,42 @@ pub fn frame_at(sprite: &Sprite, tag: Option<&Tag>, elapsed_ms: u64) -> usize {
     order.last().copied().unwrap_or(0)
 }
 
+/// How long until playback moves on from the frame showing at
+/// `elapsed_ms`, so a preview can sleep until then instead of redrawing
+/// sixty times a second. `None` when there's nothing to animate.
+pub fn ms_until_next_frame(sprite: &Sprite, tag: Option<&Tag>, elapsed_ms: u64) -> Option<u64> {
+    let order = play_order(sprite, tag);
+    if order.len() < 2 {
+        return None;
+    }
+    let total = loop_duration_ms(sprite, tag).max(1);
+    let mut remaining = elapsed_ms % total;
+    for &frame in &order {
+        let duration = sprite.frames[frame].duration_ms as u64;
+        if remaining < duration {
+            return Some(duration - remaining);
+        }
+        remaining -= duration;
+    }
+    Some(1)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_preview_sleeps_until_the_next_frame_is_due() {
+        let sprite = sprite_with_durations(&[100, 250]);
+        assert_eq!(ms_until_next_frame(&sprite, None, 30), Some(70));
+        assert_eq!(ms_until_next_frame(&sprite, None, 100), Some(250));
+        assert_eq!(ms_until_next_frame(&sprite, None, 349), Some(1));
+    }
+
+    #[test]
+    fn a_single_frame_never_needs_a_redraw() {
+        assert_eq!(ms_until_next_frame(&sprite_with_durations(&[100]), None, 5), None);
+    }
 
     fn sprite_with_durations(durations: &[u32]) -> Sprite {
         let mut sprite = Sprite::new(1, 1);

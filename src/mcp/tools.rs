@@ -6,6 +6,7 @@
 //! layer/frame) into editor `Command`s, so an LLM edit is exactly as
 //! undoable as a human one.
 
+use super::Workspace;
 use crate::editor::{Brush, Command, Ink, LoopDirection, Palette, Pattern, PixelValue, Rect, Rgba};
 use crate::io::{self, SheetLayout, SheetOptions};
 use crate::studio::Studio;
@@ -343,24 +344,31 @@ fn target(studio: &mut Studio, args: &Value) -> Result<(), String> {
     Ok(())
 }
 
-pub fn call(studio: &mut Studio, name: &str, args: &Value) -> ToolResult {
+pub fn call(workspace: &mut impl Workspace, name: &str, args: &Value) -> ToolResult {
     match name {
-        "document_info" => Ok(ToolOutput::text(describe(studio))),
         "new_document" => {
             let (width, height) = (required_integer(args, "width")?, required_integer(args, "height")?);
             let (width, height) = (width.clamp(0, u32::MAX as i64) as u32, height.clamp(0, u32::MAX as i64) as u32);
             crate::editor::limits::check_canvas_size(width, height)?;
-            *studio = Studio::new(width, height);
+            let mut studio = Studio::new(width, height);
             if let Some(palette) = string(args, "palette") {
-                run(studio, Command::UseBuiltInPalette { name: palette.into() })?;
+                run(&mut studio, Command::UseBuiltInPalette { name: palette.into() })?;
             }
+            workspace.open(studio);
             Ok(ToolOutput::text(format!("new {width}×{height} sprite")))
         }
         "open_document" => {
             let path = path(args, "path")?;
-            *studio = Studio::open(&path).map_err(|e| format!("{e:#}"))?;
-            Ok(ToolOutput::text(format!("opened {}\n\n{}", path.display(), describe(studio))))
+            workspace.open(Studio::open(&path).map_err(|e| format!("{e:#}"))?);
+            Ok(ToolOutput::text(format!("opened {}\n\n{}", path.display(), describe(workspace.studio()))))
         }
+        _ => call_on_studio(workspace.studio(), name, args),
+    }
+}
+
+fn call_on_studio(studio: &mut Studio, name: &str, args: &Value) -> ToolResult {
+    match name {
+        "document_info" => Ok(ToolOutput::text(describe(studio))),
         "save_document" => {
             let requested = string(args, "path").map(PathBuf::from);
             let saved = studio.save(requested.as_deref()).map_err(|e| format!("{e:#}"))?;

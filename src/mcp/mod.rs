@@ -8,6 +8,28 @@
 pub mod http;
 pub mod tools;
 
+/// Where MCP tools do their work. Most tools edit one studio. Two of them,
+/// `new_document` and `open_document`, bring a whole new studio into the
+/// world, and what that means depends on the host. Alone on stdio, the new
+/// studio simply takes over. In the app, it opens in a new tab, and the
+/// document you were working on stays exactly as it was.
+pub trait Workspace {
+    /// The studio the next tool call works on.
+    fn studio(&mut self) -> &mut Studio;
+    /// Brings in a new studio, which becomes the one tools work on.
+    fn open(&mut self, studio: Studio);
+}
+
+impl Workspace for Studio {
+    fn studio(&mut self) -> &mut Studio {
+        self
+    }
+
+    fn open(&mut self, studio: Studio) {
+        *self = studio;
+    }
+}
+
 use crate::studio::Studio;
 use serde_json::{json, Value};
 use std::io::{BufRead, Write};
@@ -20,7 +42,7 @@ and prefer the document's palette colours. Every change is undoable.";
 
 /// Handles one JSON-RPC message against a studio. Notifications (messages
 /// without an `id`) get no reply.
-pub fn handle(studio: &mut Studio, message: &Value) -> Option<Value> {
+pub fn handle(workspace: &mut impl Workspace, message: &Value) -> Option<Value> {
     let id = message.get("id").cloned();
     let method = message.get("method").and_then(Value::as_str).unwrap_or_default();
     let params = message.get("params").cloned().unwrap_or(json!({}));
@@ -36,7 +58,7 @@ pub fn handle(studio: &mut Studio, message: &Value) -> Option<Value> {
         })),
         "ping" => Ok(json!({})),
         "tools/list" => Ok(json!({ "tools": tool_list() })),
-        "tools/call" => call_tool(studio, &params),
+        "tools/call" => call_tool(workspace, &params),
         _ => Err((-32601, format!("method `{method}` is not supported"))),
     };
     Some(match outcome {
@@ -45,7 +67,7 @@ pub fn handle(studio: &mut Studio, message: &Value) -> Option<Value> {
     })
 }
 
-fn call_tool(studio: &mut Studio, params: &Value) -> Result<Value, (i64, String)> {
+fn call_tool(workspace: &mut impl Workspace, params: &Value) -> Result<Value, (i64, String)> {
     let name =
         params.get("name").and_then(Value::as_str).ok_or((-32602, "tools/call needs a tool `name`".to_string()))?;
     if !tools::catalogue().iter().any(|t| t.name == name) {
@@ -54,7 +76,7 @@ fn call_tool(studio: &mut Studio, params: &Value) -> Result<Value, (i64, String)
     let arguments = params.get("arguments").cloned().unwrap_or(json!({}));
     // Tool failures are results, not protocol errors, so the model can
     // read the message and correct itself.
-    Ok(match tools::call(studio, name, &arguments) {
+    Ok(match tools::call(workspace, name, &arguments) {
         Ok(output) => json!({ "content": tools::content_blocks(&output), "isError": false }),
         Err(message) => json!({ "content": [{ "type": "text", "text": message }], "isError": true }),
     })

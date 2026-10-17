@@ -141,10 +141,14 @@ impl AgentWorker {
 pub struct DiffusionJob {
     inbox: Receiver<Result<Pixels, String>>,
     pub prompt: String,
+    /// The id of the document the result belongs to, wherever the user
+    /// has wandered off to by the time it arrives.
+    pub document: u64,
 }
 
 impl DiffusionJob {
     pub fn start(
+        document: u64,
         backend: Backend,
         generation: Generation,
         landing: Landing,
@@ -157,7 +161,7 @@ impl DiffusionJob {
             let _ = outbox.send(result);
             wake();
         });
-        DiffusionJob { inbox, prompt }
+        DiffusionJob { inbox, prompt, document }
     }
 
     pub fn poll(&self) -> Option<Result<Pixels, String>> {
