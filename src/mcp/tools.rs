@@ -402,217 +402,51 @@ pub fn call(workspace: &mut impl Workspace, name: &str, args: &Value) -> ToolRes
 fn call_on_studio(studio: &mut Studio, name: &str, args: &Value) -> ToolResult {
     match name {
         "document_info" => Ok(ToolOutput::text(describe(studio))),
-        "save_document" => {
-            let requested = string(args, "path").map(PathBuf::from);
-            let saved = studio.save(requested.as_deref()).map_err(|e| format!("{e:#}"))?;
-            Ok(ToolOutput::text(format!("saved {}", saved.display())))
-        }
-        "render_png" => {
-            let frame = integer(args, "frame").map_or(studio.editor.frame, |f| f.max(0) as usize);
-            if frame >= studio.editor.sprite().frame_count() {
-                return Err(format!("there is no frame {frame}"));
-            }
-            let sprite = studio.editor.sprite();
-            // A preview never needs to be wider than 1024 pixels.
-            let widest_scale = (1024 / sprite.width.max(sprite.height)).clamp(1, 32);
-            let auto_scale = (256 / sprite.width.max(sprite.height)).clamp(1, 32);
-            let scale = integer(args, "scale").map_or(auto_scale, |s| s.clamp(1, 32) as u32).min(widest_scale);
-            let image = studio.editor.composite_for_display(frame).scaled_up(scale);
-            let png = io::encode_png(&image).map_err(|e| e.to_string())?;
-            Ok(ToolOutput { text: format!("frame {frame} at {scale}×"), png: Some(png) })
-        }
+        "save_document" => save_document(studio, args),
+        "render_png" => render_png(studio, args),
         "get_pixels" => pixel_grid(studio, args),
-        "set_pixels" => {
-            target(studio, args)?;
-            let pixels = args
-                .get("pixels")
-                .and_then(Value::as_array)
-                .ok_or("`pixels` must be an array of {x, y, colour}")?
-                .iter()
-                .map(|p| {
-                    Ok(PixelValue {
-                        x: required_integer(p, "x")? as i32,
-                        y: required_integer(p, "y")? as i32,
-                        colour: colour(p, "colour")?.ok_or("each pixel needs a `colour`")?,
-                    })
-                })
-                .collect::<Result<Vec<_>, String>>()?;
-            run(studio, Command::SetPixels { pixels })
-        }
-        "draw_line" => {
-            target(studio, args)?;
-            run(
-                studio,
-                Command::DrawLine {
-                    from: point(args, "from")?,
-                    to: point(args, "to")?,
-                    ink: ink(args)?,
-                    brush: brush(args),
-                },
-            )
-        }
-        "draw_rect" | "draw_ellipse" => {
-            target(studio, args)?;
-            let (from, to, ink, brush) = (point(args, "from")?, point(args, "to")?, ink(args)?, brush(args));
-            let filled = args.get("filled").and_then(Value::as_bool).unwrap_or(false);
-            let command = if name == "draw_rect" {
-                Command::DrawRect { from, to, ink, filled, brush }
-            } else {
-                Command::DrawEllipse { from, to, ink, filled, brush }
-            };
-            run(studio, command)
-        }
-        "fill" => {
-            target(studio, args)?;
-            let contiguous = args.get("contiguous").and_then(Value::as_bool).unwrap_or(true);
-            run(studio, Command::Fill { at: point(args, "at")?, ink: ink(args)?, contiguous })
-        }
-        "dither_fill" => {
-            target(studio, args)?;
+        "set_pixels" => targeted(studio, args, set_pixels_command),
+        "draw_line" => targeted(studio, args, |args| {
+            Ok(Command::DrawLine {
+                from: point(args, "from")?,
+                to: point(args, "to")?,
+                ink: ink(args)?,
+                brush: brush(args),
+            })
+        }),
+        "draw_rect" | "draw_ellipse" => targeted(studio, args, |args| shape_command(name, args)),
+        "fill" => targeted(studio, args, |args| {
+            let contiguous = flag(args, "contiguous").unwrap_or(true);
+            Ok(Command::Fill { at: point(args, "at")?, ink: ink(args)?, contiguous })
+        }),
+        "dither_fill" => targeted(studio, args, |args| {
             let primary = colour(args, "colour")?.ok_or("`colour` is required")?;
             let secondary = colour(args, "secondary")?.ok_or("`secondary` is required")?;
-            run(
-                studio,
-                Command::GradientFill { from: point(args, "from")?, to: point(args, "to")?, primary, secondary },
-            )
-        }
-        "outline" => {
-            target(studio, args)?;
+            Ok(Command::GradientFill { from: point(args, "from")?, to: point(args, "to")?, primary, secondary })
+        }),
+        "outline" => targeted(studio, args, |args| {
             let colour = colour(args, "colour")?.ok_or("`colour` is required")?;
-            run(
-                studio,
-                Command::Outline { colour, diagonals: args.get("diagonals").and_then(Value::as_bool).unwrap_or(false) },
-            )
-        }
+            Ok(Command::Outline { colour, diagonals: flag(args, "diagonals").unwrap_or(false) })
+        }),
         "add_layer" => run(studio, Command::AddLayer { name: string(args, "name").map(str::to_string) }),
         "add_group" => run(studio, Command::AddGroup { name: string(args, "name").map(str::to_string) }),
         "set_layer" => set_layer(studio, args),
-        "select_layer" => run(studio, Command::SelectLayer { index: required_integer(args, "index")?.max(0) as usize }),
-        "add_frame" => {
-            let copy = args.get("copy").and_then(Value::as_bool).unwrap_or(false);
-            let summary =
-                run(studio, if copy { Command::DuplicateFrame { as_clone: false } } else { Command::AddFrame })?;
-            if let Some(duration) = integer(args, "duration_ms") {
-                run(studio, Command::SetFrameDuration { duration_ms: duration.max(1) as u32, all_frames: false })?;
-            }
-            Ok(summary)
-        }
+        "select_layer" => run(studio, Command::SelectLayer { index: index_arg(args, "index")? }),
+        "add_frame" => add_frame(studio, args),
         "clone_frame" => run(studio, Command::DuplicateFrame { as_clone: true }),
-        "select_frame" => run(studio, Command::SelectFrame { index: required_integer(args, "index")?.max(0) as usize }),
-        "set_palette" => match (string(args, "name"), args.get("colours").and_then(Value::as_array)) {
-            (_, Some(colours)) => {
-                let colours = colours
-                    .iter()
-                    .map(|c| c.as_str().and_then(Rgba::from_hex).ok_or_else(|| format!("`{c}` is not a hex colour")))
-                    .collect::<Result<Vec<_>, _>>()?;
-                let name = string(args, "name").unwrap_or("Custom").to_string();
-                run(studio, Command::SetPalette { palette: Palette { name, colours } })
-            }
-            (Some(name), None) => run(studio, Command::UseBuiltInPalette { name: name.into() }),
-            (None, None) => Err("give a built-in palette `name` or a list of `colours`".into()),
-        },
-        "add_tag" => {
-            let direction = match string(args, "direction").unwrap_or("forward") {
-                "forward" => LoopDirection::Forward,
-                "reverse" => LoopDirection::Reverse,
-                "ping_pong" | "pingpong" => LoopDirection::PingPong,
-                other => return Err(format!("unknown direction `{other}`; use forward, reverse or ping_pong")),
-            };
-            run(
-                studio,
-                Command::AddTag {
-                    name: required_string(args, "name")?.into(),
-                    from: required_integer(args, "from")?.max(0) as usize,
-                    to: required_integer(args, "to")?.max(0) as usize,
-                    direction,
-                },
-            )
-        }
-        "add_note" => {
-            let text = required_string(args, "text")?.to_string();
-            match (integer(args, "x"), integer(args, "y"), integer(args, "frame")) {
-                (Some(x), Some(y), _) => run(studio, Command::AddPin { x: x as i32, y: y as i32, text }),
-                (_, _, Some(frame)) => run(studio, Command::SetFrameNote { frame: frame.max(0) as usize, text }),
-                _ => {
-                    let existing = &studio.editor.sprite().notes;
-                    let combined = if existing.is_empty() { text } else { format!("{existing}\n{text}") };
-                    run(studio, Command::SetNotes { text: combined })
-                }
-            }
-        }
+        "select_frame" => run(studio, Command::SelectFrame { index: index_arg(args, "index")? }),
+        "set_palette" => run(studio, palette_command(args)?),
+        "add_tag" => run(studio, tag_command(args)?),
+        "add_note" => add_note(studio, args),
         "list_notes" => Ok(ToolOutput::text(notes_text(studio))),
         "commit_version" => run(studio, Command::CommitVersion { message: required_string(args, "message")?.into() }),
-        "list_versions" => {
-            let versions = &studio.editor.document.versions;
-            if versions.is_empty() {
-                return Ok(ToolOutput::text("no versions yet"));
-            }
-            let lines: Vec<String> =
-                versions.iter().map(|v| format!("{}: {} (at {})", v.id, v.message, v.created_at)).collect();
-            Ok(ToolOutput::text(lines.join("\n")))
-        }
+        "list_versions" => Ok(ToolOutput::text(versions_text(studio))),
         "restore_version" => run(studio, Command::RestoreVersion { id: required_integer(args, "id")?.max(0) as u32 }),
-        "export_png" => {
-            let target_path = export_path(args, "png")?;
-            let frame = integer(args, "frame").map_or(studio.editor.frame, |f| f.max(0) as usize);
-            if frame >= studio.editor.sprite().frame_count() {
-                return Err(format!("there is no frame {frame}"));
-            }
-            io::export_png(&target_path, studio.editor.sprite(), frame, scale_arg(args))
-                .map_err(|e| format!("{e:#}"))?;
-            Ok(ToolOutput::text(format!("wrote {}", target_path.display())))
-        }
-        "export_apng" => {
-            let target_path = export_path(args, "png")?;
-            io::export_apng(&target_path, studio.editor.sprite(), string(args, "tag"), scale_arg(args))
-                .map_err(|e| format!("{e:#}"))?;
-            Ok(ToolOutput::text(format!("wrote {}", target_path.display())))
-        }
-        "export_webp" => {
-            let target_path = export_path(args, "webp")?;
-            let frame = integer(args, "frame").map_or(studio.editor.frame, |f| f.max(0) as usize);
-            if frame >= studio.editor.sprite().frame_count() {
-                return Err(format!("there is no frame {frame}"));
-            }
-            io::export_webp(&target_path, studio.editor.sprite(), frame, scale_arg(args))
-                .map_err(|e| format!("{e:#}"))?;
-            Ok(ToolOutput::text(format!("wrote {}", target_path.display())))
-        }
-        "export_gif" => {
-            let target_path = export_path(args, "gif")?;
-            io::export_gif(&target_path, studio.editor.sprite(), string(args, "tag"), scale_arg(args))
-                .map_err(|e| format!("{e:#}"))?;
-            Ok(ToolOutput::text(format!("wrote {}", target_path.display())))
-        }
-        "export_sheet" => {
-            let target_path = export_path(args, "png")?;
-            let layout = match string(args, "layout").unwrap_or("grid") {
-                "horizontal" => SheetLayout::Horizontal,
-                "vertical" => SheetLayout::Vertical,
-                "packed" => SheetLayout::Packed,
-                "grid" => SheetLayout::Grid { columns: integer(args, "columns").map(|c| c.max(1) as u32) },
-                other => return Err(format!("unknown layout `{other}`")),
-            };
-            let options = SheetOptions {
-                layout,
-                padding: integer(args, "padding").unwrap_or(0).clamp(0, 64) as u32,
-                trim: args.get("trim").and_then(Value::as_bool).unwrap_or(false),
-                merge_duplicates: args.get("merge_duplicates").and_then(Value::as_bool).unwrap_or(false),
-                tag: string(args, "tag").map(str::to_string),
-                scale: scale_arg(args),
-                ..SheetOptions::default()
-            };
-            let sheet = io::export_sheet(&target_path, studio.editor.sprite(), &studio.title(), &options)
-                .map_err(|e| format!("{e:#}"))?;
-            Ok(ToolOutput::text(format!(
-                "wrote {} ({}×{}, {} frames, {} distinct) and its .json",
-                target_path.display(),
-                sheet.image.width(),
-                sheet.image.height(),
-                sheet.frames.len(),
-                sheet.distinct_images()
-            )))
-        }
+        "export_png" => export(studio, args, Export::Png),
+        "export_webp" => export(studio, args, Export::Webp),
+        "export_gif" => export(studio, args, Export::Gif),
+        "export_apng" => export(studio, args, Export::Apng),
+        "export_sheet" => export_sheet(studio, args),
         "undo" => run(studio, Command::Undo),
         "redo" => run(studio, Command::Redo),
         "run_command" => {
@@ -622,6 +456,204 @@ fn call_on_studio(studio: &mut Studio, name: &str, args: &Value) -> ToolResult {
         }
         unknown => Err(format!("there is no tool called `{unknown}`")),
     }
+}
+
+// ----- one function per tool that needs more than a line ----------------------
+
+/// Runs a drawing command on the `layer`/`frame` the arguments name.
+fn targeted(studio: &mut Studio, args: &Value, command: impl FnOnce(&Value) -> Result<Command, String>) -> ToolResult {
+    target(studio, args)?;
+    let command = command(args)?;
+    run(studio, command)
+}
+
+fn flag(args: &Value, key: &str) -> Option<bool> {
+    args.get(key).and_then(Value::as_bool)
+}
+
+fn index_arg(args: &Value, key: &str) -> Result<usize, String> {
+    Ok(required_integer(args, key)?.max(0) as usize)
+}
+
+/// The `frame` argument, or the current frame, checked to exist.
+fn frame_arg(studio: &Studio, args: &Value) -> Result<usize, String> {
+    let frame = integer(args, "frame").map_or(studio.editor.frame, |f| f.max(0) as usize);
+    if frame >= studio.editor.sprite().frame_count() {
+        return Err(format!("there is no frame {frame}"));
+    }
+    Ok(frame)
+}
+
+fn save_document(studio: &mut Studio, args: &Value) -> ToolResult {
+    let requested = string(args, "path").map(PathBuf::from);
+    let saved = studio.save(requested.as_deref()).map_err(|e| format!("{e:#}"))?;
+    Ok(ToolOutput::text(format!("saved {}", saved.display())))
+}
+
+fn render_png(studio: &mut Studio, args: &Value) -> ToolResult {
+    let frame = frame_arg(studio, args)?;
+    let sprite = studio.editor.sprite();
+    // A preview never needs to be wider than 1024 pixels.
+    let widest_scale = (1024 / sprite.width.max(sprite.height)).clamp(1, 32);
+    let auto_scale = (256 / sprite.width.max(sprite.height)).clamp(1, 32);
+    let scale = integer(args, "scale").map_or(auto_scale, |s| s.clamp(1, 32) as u32).min(widest_scale);
+    let image = studio.editor.composite_for_display(frame).scaled_up(scale);
+    let png = io::encode_png(&image).map_err(|e| e.to_string())?;
+    Ok(ToolOutput { text: format!("frame {frame} at {scale}×"), png: Some(png) })
+}
+
+fn set_pixels_command(args: &Value) -> Result<Command, String> {
+    let pixels = args
+        .get("pixels")
+        .and_then(Value::as_array)
+        .ok_or("`pixels` must be an array of {x, y, colour}")?
+        .iter()
+        .map(|p| {
+            Ok(PixelValue {
+                x: required_integer(p, "x")? as i32,
+                y: required_integer(p, "y")? as i32,
+                colour: colour(p, "colour")?.ok_or("each pixel needs a `colour`")?,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    Ok(Command::SetPixels { pixels })
+}
+
+fn shape_command(tool: &str, args: &Value) -> Result<Command, String> {
+    let (from, to, ink, brush) = (point(args, "from")?, point(args, "to")?, ink(args)?, brush(args));
+    let filled = flag(args, "filled").unwrap_or(false);
+    Ok(if tool == "draw_rect" {
+        Command::DrawRect { from, to, ink, filled, brush }
+    } else {
+        Command::DrawEllipse { from, to, ink, filled, brush }
+    })
+}
+
+fn add_frame(studio: &mut Studio, args: &Value) -> ToolResult {
+    let copy = flag(args, "copy").unwrap_or(false);
+    let summary = run(studio, if copy { Command::DuplicateFrame { as_clone: false } } else { Command::AddFrame })?;
+    if let Some(duration) = integer(args, "duration_ms") {
+        run(studio, Command::SetFrameDuration { duration_ms: duration.max(1) as u32, all_frames: false })?;
+    }
+    Ok(summary)
+}
+
+fn palette_command(args: &Value) -> Result<Command, String> {
+    match (string(args, "name"), args.get("colours").and_then(Value::as_array)) {
+        (_, Some(colours)) => {
+            let colours = colours
+                .iter()
+                .map(|c| c.as_str().and_then(Rgba::from_hex).ok_or_else(|| format!("`{c}` is not a hex colour")))
+                .collect::<Result<Vec<_>, _>>()?;
+            let name = string(args, "name").unwrap_or("Custom").to_string();
+            Ok(Command::SetPalette { palette: Palette { name, colours } })
+        }
+        (Some(name), None) => Ok(Command::UseBuiltInPalette { name: name.into() }),
+        (None, None) => Err("give a built-in palette `name` or a list of `colours`".into()),
+    }
+}
+
+fn tag_command(args: &Value) -> Result<Command, String> {
+    let direction = match string(args, "direction").unwrap_or("forward") {
+        "forward" => LoopDirection::Forward,
+        "reverse" => LoopDirection::Reverse,
+        "ping_pong" | "pingpong" => LoopDirection::PingPong,
+        other => return Err(format!("unknown direction `{other}`; use forward, reverse or ping_pong")),
+    };
+    Ok(Command::AddTag {
+        name: required_string(args, "name")?.into(),
+        from: index_arg(args, "from")?,
+        to: index_arg(args, "to")?,
+        direction,
+    })
+}
+
+/// A note pinned at (x, y), on a frame, or added to the document's notes.
+fn add_note(studio: &mut Studio, args: &Value) -> ToolResult {
+    let text = required_string(args, "text")?.to_string();
+    match (integer(args, "x"), integer(args, "y"), integer(args, "frame")) {
+        (Some(x), Some(y), _) => run(studio, Command::AddPin { x: x as i32, y: y as i32, text }),
+        (_, _, Some(frame)) => run(studio, Command::SetFrameNote { frame: frame.max(0) as usize, text }),
+        _ => {
+            let existing = &studio.editor.sprite().notes;
+            let combined = if existing.is_empty() { text } else { format!("{existing}\n{text}") };
+            run(studio, Command::SetNotes { text: combined })
+        }
+    }
+}
+
+fn versions_text(studio: &Studio) -> String {
+    let versions = &studio.editor.document.versions;
+    if versions.is_empty() {
+        return "no versions yet".into();
+    }
+    versions.iter().map(|v| format!("{}: {} (at {})", v.id, v.message, v.created_at)).collect::<Vec<_>>().join("\n")
+}
+
+#[derive(Clone, Copy)]
+enum Export {
+    Png,
+    Webp,
+    Gif,
+    Apng,
+}
+
+/// Writes the file. Its extension is always forced to match its format,
+/// so a model can only ever write the kind of file it asked to export,
+/// never over a script or a config file.
+fn export(studio: &mut Studio, args: &Value, format: Export) -> ToolResult {
+    let sprite = studio.editor.sprite();
+    let (scale, tag) = (scale_arg(args), string(args, "tag"));
+    let path = match format {
+        Export::Png => {
+            let path = export_path(args, "png")?;
+            io::export_png(&path, sprite, frame_arg(studio, args)?, scale).map(|_| path)
+        }
+        Export::Webp => {
+            let path = export_path(args, "webp")?;
+            io::export_webp(&path, sprite, frame_arg(studio, args)?, scale).map(|_| path)
+        }
+        Export::Gif => {
+            let path = export_path(args, "gif")?;
+            io::export_gif(&path, sprite, tag, scale).map(|_| path)
+        }
+        Export::Apng => {
+            let path = export_path(args, "png")?;
+            io::export_apng(&path, sprite, tag, scale).map(|_| path)
+        }
+    }
+    .map_err(|e| format!("{e:#}"))?;
+    Ok(ToolOutput::text(format!("wrote {}", path.display())))
+}
+
+fn export_sheet(studio: &mut Studio, args: &Value) -> ToolResult {
+    let target_path = export_path(args, "png")?;
+    let layout = match string(args, "layout").unwrap_or("grid") {
+        "horizontal" => SheetLayout::Horizontal,
+        "vertical" => SheetLayout::Vertical,
+        "packed" => SheetLayout::Packed,
+        "grid" => SheetLayout::Grid { columns: integer(args, "columns").map(|c| c.max(1) as u32) },
+        other => return Err(format!("unknown layout `{other}`")),
+    };
+    let options = SheetOptions {
+        layout,
+        padding: integer(args, "padding").unwrap_or(0).clamp(0, 64) as u32,
+        trim: flag(args, "trim").unwrap_or(false),
+        merge_duplicates: flag(args, "merge_duplicates").unwrap_or(false),
+        tag: string(args, "tag").map(str::to_string),
+        scale: scale_arg(args),
+        ..SheetOptions::default()
+    };
+    let sheet = io::export_sheet(&target_path, studio.editor.sprite(), &studio.title(), &options)
+        .map_err(|e| format!("{e:#}"))?;
+    Ok(ToolOutput::text(format!(
+        "wrote {} ({}×{}, {} frames, {} distinct) and its .json",
+        target_path.display(),
+        sheet.image.width(),
+        sheet.image.height(),
+        sheet.frames.len(),
+        sheet.distinct_images()
+    )))
 }
 
 /// Applies each property `set_layer` was given as its own command, in a
