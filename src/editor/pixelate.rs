@@ -75,7 +75,7 @@ pub fn remove_background(image: &Pixels, tolerance: f32) -> Pixels {
         for (x, y) in contiguous_region(&similar, corner) {
             out.set(x, y, Rgba::TRANSPARENT);
         }
-        clear_enclosed_pockets(&mut out, backdrop, tolerance);
+        clear_enclosed_pockets(&mut out, backdrop);
     }
     out
 }
@@ -85,9 +85,17 @@ pub fn remove_background(image: &Pixels, tolerance: f32) -> Pixels {
 /// usually the subject's own highlights.
 const SMALLEST_POCKET: f32 = 0.0025;
 
-fn clear_enclosed_pockets(image: &mut Pixels, backdrop: Rgba, tolerance: f32) {
+/// How close an enclosed pocket must be to the backdrop. Much tighter than
+/// the corner flood's tolerance: the flood can only spread from the edge,
+/// but a pocket can be anywhere, and a pale part of the subject (cream
+/// stripes, a white belly) sits well within the flood's tolerance of a
+/// white backdrop. A real pocket of backdrop is the backdrop, give or take
+/// a little noise.
+const POCKET_TOLERANCE: f32 = 0.02;
+
+fn clear_enclosed_pockets(image: &mut Pixels, backdrop: Rgba) {
     let smallest = ((image.width() * image.height()) as f32 * SMALLEST_POCKET).ceil() as usize;
-    let similar = snap_similar(image, backdrop, tolerance);
+    let similar = snap_similar(image, backdrop, POCKET_TOLERANCE);
     let mut seen = vec![false; similar.colours().len()];
     let index = |x: i32, y: i32| (y as u32 * similar.width() + x as u32) as usize;
     for (x, y) in similar.bounds().points() {
@@ -315,6 +323,16 @@ mod tests {
         assert_eq!(cut_out.get(50, 50), Rgba::TRANSPARENT, "the hole is backdrop");
         assert_eq!(cut_out.get(15, 15), Rgba::WHITE, "the glint is subject");
         assert_eq!(cut_out.get(20, 20), Rgba::rgb(220, 20, 40));
+    }
+
+    #[test]
+    fn a_large_pale_patch_of_the_subject_is_not_mistaken_for_a_pocket() {
+        let cream = Rgba::rgb(252, 243, 212);
+        let mut image = ring_with_a_glint();
+        for (x, y) in Rect::new(30, 30, 40, 40).points() {
+            image.set(x, y, cream);
+        }
+        assert_eq!(remove_background(&image, 0.08).get(50, 50), cream);
     }
 
     #[test]
