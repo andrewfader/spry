@@ -239,3 +239,24 @@ fn fitting_to_the_subject_fills_the_frame_and_stands_on_the_bottom_row() {
     assert_eq!(sprite.opaque_bounds(), Some(Rect::new(0, 24, 32, 8)));
     assert!(sprite.colours().iter().all(|&c| c.is_transparent() || c == RED));
 }
+
+#[test]
+fn a_comfyui_workflow_that_fails_is_reported_at_once_with_its_reason() {
+    let server = FakeServer::start(|request, _| {
+        if request.path == "/prompt" {
+            Reply::json(json!({ "prompt_id": "abc" }))
+        } else {
+            Reply::json(
+                json!({ "abc": { "outputs": {}, "status": { "status_str": "error", "completed": false, "messages": [
+                ["execution_start", { "prompt_id": "abc" }],
+                ["execution_error", { "node_type": "UNETLoader", "exception_message": "Allocation on device" }]
+            ] } } }),
+            )
+        }
+    });
+    let started = std::time::Instant::now();
+    let error = diffusion::generate_sprite(&comfy(&server, None), &generation("x"), &pico8_landing(8)).unwrap_err();
+    assert!(started.elapsed() < std::time::Duration::from_secs(5), "it waited for a run that had already failed");
+    let said = format!("{error:#}");
+    assert!(said.contains("UNETLoader") && said.contains("Allocation on device"), "{said}");
+}

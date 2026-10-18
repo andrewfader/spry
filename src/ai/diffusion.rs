@@ -312,6 +312,9 @@ fn comfyui(url: &str, workflow: Option<&str>, checkpoint: &str, generation: &Gen
         if let Some(found) = first_output_image(&history[&prompt_id]) {
             break found;
         }
+        if let Some(reason) = execution_error(&history[&prompt_id]) {
+            bail!("ComfyUI couldn't run the workflow: {reason}");
+        }
         if started.elapsed() > Duration::from_secs(600) {
             bail!("ComfyUI didn't finish within 10 minutes");
         }
@@ -407,6 +410,25 @@ fn upload_to_comfyui(http: &ureq::Agent, url: &str, image: &Pixels) -> Result<St
 
 /// The (filename, subfolder, type) of the first image in a ComfyUI
 /// history entry, once the run has finished.
+/// Why a finished run failed, if it did. ComfyUI files a failed run in
+/// its history like a finished one, just with no images, so without this
+/// Spry would wait out the whole timeout.
+fn execution_error(entry: &Value) -> Option<String> {
+    if entry["status"]["status_str"] != "error" {
+        return None;
+    }
+    let messages = entry["status"]["messages"].as_array().map(Vec::as_slice).unwrap_or_default();
+    let details = messages.iter().find(|message| message[0] == "execution_error").map(|message| &message[1]);
+    Some(match details {
+        Some(details) => format!(
+            "{} said \"{}\"",
+            details["node_type"].as_str().unwrap_or("a node"),
+            details["exception_message"].as_str().unwrap_or("").trim()
+        ),
+        None => "the run ended in an error".into(),
+    })
+}
+
 fn first_output_image(entry: &Value) -> Option<(String, String, String)> {
     entry["outputs"].as_object()?.values().find_map(|output| {
         let image = output["images"].as_array()?.first()?;
