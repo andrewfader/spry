@@ -536,7 +536,7 @@ impl App {
                     }
                     if let Some(job) = &self.diffusion {
                         ui.spinner();
-                        ui.weak(format!("generating “{}”", job.prompt));
+                        ui.weak(format!("generating “{}”", job.layer_name));
                     }
                     ui.separator();
                     ui.label(&self.status);
@@ -1333,8 +1333,9 @@ impl App {
             };
             let wake = ctx.clone();
             let document = self.document().id;
-            self.diffusion =
-                Some(DiffusionJob::start(document, backend, generation, landing, move || wake.request_repaint()));
+            let layer_name = diffusion::layer_name_for(&generation.prompt);
+            let request = diffusion::Request { backend, generation, landing, layer_name };
+            self.diffusion = Some(DiffusionJob::start(document, request, move || wake.request_repaint()));
             self.status = "Generating… the result arrives as a new layer, snapped to your palette".into();
         }
         if busy {

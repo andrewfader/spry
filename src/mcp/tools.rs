@@ -7,6 +7,7 @@
 //! undoable as a human one.
 
 use super::Workspace;
+use crate::ai::diffusion::{self, Backend, Generation, Lora, Preset, Request};
 use crate::editor::pixelate::{Fit, Landing};
 use crate::editor::BlendMode;
 use crate::editor::{Brush, Command, Ink, LoopDirection, Palette, Pattern, PixelValue, Rect, Rgba};
@@ -312,6 +313,28 @@ pub fn catalogue() -> Vec<ToolSpec> {
             description: "Bring a picture (PNG, JPEG, GIF…) in as a new layer on the current frame, shrunk onto the grid by dominant colour and snapped to the document's palette. By default the flat backdrop is cut away and the subject is fitted to the canvas, standing on the bottom edge.",
             input_schema: object_schema(landing_properties(json!({ "path": { "type": "string" }, "name": { "type": "string", "description": "Layer name; defaults to the file's name" } })), &["path"]),
         },
+        ToolSpec {
+            name: "generate_image",
+            description: "Paint a picture with a local diffusion server (Automatic1111/Forge, or ComfyUI with a built-in or your own API-format workflow) and land it as a new layer, shrunk onto the grid and snapped to the palette. Prompt for one subject on a plain background. Over stdio this waits for the picture; in the app it runs in the background.",
+            input_schema: object_schema(
+                landing_properties(json!({
+                    "prompt": { "type": "string" },
+                    "backend": { "type": "string", "enum": ["automatic1111", "comfyui"], "description": "Default automatic1111" },
+                    "url": { "type": "string", "description": "Server URL; defaults to http://127.0.0.1:7860 (Automatic1111) or :8188 (ComfyUI)" },
+                    "workflow": { "type": "string", "description": "ComfyUI: path to an API-format workflow JSON using {{prompt}}, {{negative}}, {{seed}}, {{steps}}, {{cfg}}, {{width}}, {{height}}, {{checkpoint}} placeholders" },
+                    "checkpoint": { "type": "string", "description": "ComfyUI: checkpoint file for the built-in workflows" },
+                    "preset": { "type": "string", "description": "A preset's name (see the error for the list); defaults to the first" },
+                    "steps": { "type": "integer", "minimum": 1 }, "cfg": { "type": "number" },
+                    "size": { "type": "integer", "minimum": 64, "description": "The model's native size; the picture keeps the canvas's shape" },
+                    "negative": { "type": "string" },
+                    "seed": { "type": "integer", "description": "Defaults to a random seed, reported back" },
+                    "restyle": { "type": "number", "minimum": 0, "maximum": 1, "description": "img2img: restyle the current frame, 0 = keep it, 1 = ignore it" },
+                    "lora": { "type": "string" }, "lora_weight": { "type": "number" },
+                    "name": { "type": "string", "description": "Layer name" }
+                })),
+                &["prompt"],
+            ),
+        },
         ToolSpec { name: "undo", description: "Undo the last change.", input_schema: object_schema(json!({}), &[]) },
         ToolSpec { name: "redo", description: "Redo the last undone change.", input_schema: object_schema(json!({}), &[]) },
         ToolSpec {
@@ -355,6 +378,10 @@ fn landing(studio: &Studio, args: &Value) -> Result<Landing, String> {
 
 fn integer(args: &Value, key: &str) -> Option<i64> {
     args.get(key).and_then(Value::as_i64)
+}
+
+fn number(args: &Value, key: &str) -> Option<f64> {
+    args.get(key).and_then(Value::as_f64)
 }
 
 fn required_integer(args: &Value, key: &str) -> Result<i64, String> {
@@ -450,6 +477,10 @@ pub fn call(workspace: &mut impl Workspace, name: &str, args: &Value) -> ToolRes
             let path = path(args, "path")?;
             workspace.open(Studio::open(&path).map_err(|e| format!("{e:#}"))?);
             Ok(ToolOutput::text(format!("opened {}\n\n{}", path.display(), describe(workspace.studio()))))
+        }
+        "generate_image" => {
+            let request = generation_request(workspace.studio(), args)?;
+            workspace.generate(request).map(ToolOutput::text)
         }
         _ => call_on_studio(workspace.studio(), name, args),
     }
@@ -548,6 +579,74 @@ fn call_on_studio(studio: &mut Studio, name: &str, args: &Value) -> ToolResult {
 }
 
 // ----- one function per tool that needs more than a line ----------------------
+
+/// Builds a generation from the tool's arguments, starting from a preset
+/// and letting the arguments override it.
+fn generation_request(studio: &Studio, args: &Value) -> Result<Request, String> {
+    let prompt = required_string(args, "prompt")?.to_string();
+    let mut preset = preset_named(string(args, "preset"))?;
+    if let Some(steps) = integer(args, "steps") {
+        preset.steps = steps.clamp(1, 200) as u32;
+    }
+    if let Some(cfg) = number(args, "cfg") {
+        preset.cfg = cfg as f32;
+    }
+    if let Some(size) = integer(args, "size") {
+        preset.native_size = size.clamp(64, 4096) as u32;
+    }
+    if let Some(negative) = string(args, "negative") {
+        preset.negative = negative.to_string();
+    }
+    let editor = &studio.editor;
+    let sprite = editor.sprite();
+    let generation = Generation {
+        seed: integer(args, "seed").unwrap_or_else(|| fastrand::i64(0..i32::MAX as i64)),
+        init_image: number(args, "restyle")
+            .map(|strength| (editor.composite_for_display(editor.frame), strength.clamp(0.0, 1.0) as f32)),
+        canvas: (sprite.width, sprite.height),
+        lora: string(args, "lora")
+            .map(|name| Lora { name: name.to_string(), weight: number(args, "lora_weight").unwrap_or(1.0) as f32 }),
+        preset,
+        prompt,
+    };
+    Ok(Request {
+        backend: backend(args)?,
+        layer_name: string(args, "name").map_or_else(|| diffusion::layer_name_for(&generation.prompt), str::to_string),
+        landing: landing(studio, args)?,
+        generation,
+    })
+}
+
+fn preset_named(name: Option<&str>) -> Result<Preset, String> {
+    let presets = diffusion::presets();
+    let Some(name) = name else { return Ok(presets[0].clone()) };
+    let names = presets.iter().map(|preset| preset.name.clone()).collect::<Vec<_>>().join("; ");
+    presets
+        .into_iter()
+        .find(|preset| preset.name.eq_ignore_ascii_case(name))
+        .ok_or_else(|| format!("there's no preset called `{name}`; the presets are: {names}"))
+}
+
+fn backend(args: &Value) -> Result<Backend, String> {
+    let url = |default: &str| string(args, "url").unwrap_or(default).to_string();
+    match string(args, "backend") {
+        None | Some("automatic1111") => Ok(Backend::Automatic1111 { url: url("http://127.0.0.1:7860") }),
+        Some("comfyui") => {
+            let workflow = match string(args, "workflow") {
+                Some(file) => {
+                    Some(std::fs::read_to_string(file).map_err(|e| format!("reading the workflow {file}: {e}"))?)
+                }
+                None => None,
+            };
+            let checkpoint = string(args, "checkpoint").unwrap_or_default().to_string();
+            if workflow.is_none() && checkpoint.is_empty() {
+                return Err("ComfyUI needs a `checkpoint` for the built-in workflows, or your own `workflow`".into());
+            }
+            Ok(Backend::ComfyUi { url: url("http://127.0.0.1:8188"), workflow, checkpoint })
+        }
+        Some(other) => Err(format!("`backend` is automatic1111 or comfyui, not `{other}`")),
+    }
+}
 
 fn import_image(studio: &mut Studio, args: &Value) -> ToolResult {
     let path = path(args, "path")?;

@@ -7,7 +7,7 @@
 //! back. This is the same arrangement as the MCP HTTP bridge.
 
 use crate::ai::agent::{AgentEvent, Conversation, Provider};
-use crate::ai::diffusion::{self, Backend, Generation, Landing};
+use crate::ai::diffusion::Request;
 use crate::editor::Pixels;
 use crate::mcp::tools::ToolResult;
 use serde_json::Value;
@@ -140,28 +140,21 @@ impl AgentWorker {
 /// One diffusion generation in flight.
 pub struct DiffusionJob {
     inbox: Receiver<Result<Pixels, String>>,
-    pub prompt: String,
+    pub layer_name: String,
     /// The id of the document the result belongs to, wherever the user
     /// has wandered off to by the time it arrives.
     pub document: u64,
 }
 
 impl DiffusionJob {
-    pub fn start(
-        document: u64,
-        backend: Backend,
-        generation: Generation,
-        landing: Landing,
-        wake: impl Fn() + Send + 'static,
-    ) -> DiffusionJob {
+    pub fn start(document: u64, request: Request, wake: impl Fn() + Send + 'static) -> DiffusionJob {
         let (outbox, inbox) = mpsc::channel();
-        let prompt = generation.prompt.clone();
+        let layer_name = request.layer_name.clone();
         std::thread::spawn(move || {
-            let result = diffusion::generate_sprite(&backend, &generation, &landing).map_err(|e| format!("{e:#}"));
-            let _ = outbox.send(result);
+            let _ = outbox.send(request.run().map_err(|e| format!("{e:#}")));
             wake();
         });
-        DiffusionJob { inbox, prompt, document }
+        DiffusionJob { inbox, layer_name, document }
     }
 
     pub fn poll(&self) -> Option<Result<Pixels, String>> {

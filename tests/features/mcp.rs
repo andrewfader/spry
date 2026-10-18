@@ -106,6 +106,7 @@ fn initialize_then_list_every_tool_with_a_schema() {
         "export_gif",
         "export_sheet",
         "import_image",
+        "generate_image",
         "undo",
         "redo",
     ] {
@@ -188,6 +189,54 @@ fn an_imported_picture_lands_as_a_layer_fitted_to_its_subject() {
     assert_eq!(imported["isError"], false, "{imported}");
     let info = session.call("document_info", json!({}));
     assert!(info["content"][0]["text"].as_str().unwrap().contains("bar"), "{info}");
+    let image = rendered(&mut session);
+    assert_eq!(image.opaque_bounds(), Some(spry::editor::Rect::new(0, 24, 32, 8)));
+    assert_eq!(image.get(16, 28), RED);
+}
+
+/// A workflow file the way ComfyUI exports one ("Save (API format)"), with
+/// Spry's placeholders where the values go.
+const WORKFLOW: &str = r#"{
+  "6": { "class_type": "CLIPTextEncode", "inputs": { "text": "{{prompt}}" } },
+  "8": { "class_type": "KSampler", "inputs": { "seed": "{{seed}}", "steps": "{{steps}}", "cfg": "{{cfg}}" } },
+  "5": { "class_type": "EmptySD3LatentImage", "inputs": { "width": "{{width}}", "height": "{{height}}" } }
+}"#;
+
+#[test]
+fn generate_image_queues_your_comfyui_workflow_and_lands_the_picture() {
+    let png = spry::io::encode_png(&bar_on_white()).unwrap();
+    let server = FakeServer::start(move |request, _| {
+        if request.path == "/prompt" {
+            Reply::json(json!({ "prompt_id": "abc" }))
+        } else if request.path.starts_with("/history/abc") {
+            Reply::json(json!({ "abc": { "outputs": { "9": { "images": [{ "filename": "bar.png" }] } } } }))
+        } else {
+            Reply::png(png.clone())
+        }
+    });
+    let folder = tempfile::tempdir().unwrap();
+    let workflow = folder.path().join("z-image.json");
+    std::fs::write(&workflow, WORKFLOW).unwrap();
+    let mut session = McpSession::launch(&[]);
+    session.request("initialize", json!({}));
+    session.call("new_document", json!({ "width": 32, "height": 32, "palette": "PICO-8" }));
+
+    let generated = session.call(
+        "generate_image",
+        json!({ "prompt": "a red bar", "backend": "comfyui", "url": server.url, "workflow": workflow.to_str().unwrap(),
+                "seed": 42, "steps": 9, "cfg": 1.0, "size": 1024, "name": "bar" }),
+    );
+
+    assert_eq!(generated["isError"], false, "{generated}");
+    let queued =
+        server.recorded().iter().find(|r| r.path == "/prompt").expect("a queued workflow").json()["prompt"].clone();
+    assert!(queued["6"]["inputs"]["text"].as_str().unwrap().starts_with("a red bar"));
+    assert_eq!(queued["8"]["inputs"]["seed"], 42);
+    assert_eq!(queued["8"]["inputs"]["steps"], 9);
+    assert_eq!(
+        (queued["5"]["inputs"]["width"].clone(), queued["5"]["inputs"]["height"].clone()),
+        (json!(1024), json!(1024))
+    );
     let image = rendered(&mut session);
     assert_eq!(image.opaque_bounds(), Some(spry::editor::Rect::new(0, 24, 32, 8)));
     assert_eq!(image.get(16, 28), RED);

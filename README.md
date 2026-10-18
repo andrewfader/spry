@@ -82,10 +82,10 @@ trimming and duplicate merging) with Aseprite-format JSON (`frames`,
 `frameTags`, `slices`, plus Spry's `notes`). It can also import a sheet back
 into frames, detecting the grid from transparent gutters.
 
-**MCP.** `spry mcp [file]` serves 40 tools and the document and its frames as resources over stdio: drawing with
+**MCP.** `spry mcp [file]` serves 41 tools and the document and its frames as resources over stdio: drawing with
 colours, patterns and brushes, a text pixel grid, a rendered PNG the model can
 look at, layers, frames, clones, tags, palettes, notes, versions, exports,
-picture import onto the grid and palette, undo, and `run_command` for every other editor verb. In the app, enable
+picture import onto the grid and palette, diffusion generation, undo, and `run_command` for every other editor verb. In the app, enable
 **Settings → MCP server** and an agent can paint into the open window while
 you watch:
 
@@ -110,6 +110,11 @@ in the document they were asked for. img2img restyles the current frame on
 both backends. ComfyUI can also use your own exported API workflow. With
 **Fit the subject** on, the backdrop is cut away at full size and only the
 subject is shrunk, proportions kept, standing on the canvas's bottom edge.
+Agents generate too, with the `generate_image` MCP tool: over stdio it waits
+for the picture, and in the app it runs in the background like the button.
+A failed ComfyUI run is reported straight away with the node that failed.
+[`docs/workflows/z-image-turbo.json`](docs/workflows/z-image-turbo.json) is
+a ready workflow for Z-Image Turbo (9 steps, cfg 1, size 1024).
 
 **Glass UI.** A luminous backdrop, frosted panels (a real GPU blur of what's
 behind them) you can float anywhere, remembered where you leave them,

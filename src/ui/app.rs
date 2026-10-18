@@ -14,6 +14,7 @@ use super::textures::TextureCache;
 use super::theme::{self, Appearance};
 use super::tools::{Tool, ToolSettings};
 use super::workers::{AgentWorker, DiffusionJob};
+use crate::ai::diffusion::Request;
 use crate::editor::playback;
 use crate::editor::Command;
 use crate::io::{self, SheetOptions};
@@ -202,6 +203,8 @@ pub struct App {
     pub agent_turn: Option<u64>,
     pub chat_draft: String,
     pub diffusion: Option<DiffusionJob>,
+    /// For background work that has to wake the window when it's done.
+    repaint: egui::Context,
     pub generate: super::panels::GenerateForm,
     pub sheet_options: SheetOptions,
     pub export_scale: u32,
@@ -254,6 +257,7 @@ impl App {
             agent_turn: None,
             chat_draft: String::new(),
             diffusion: None,
+            repaint: ctx.clone(),
             generate: super::panels::GenerateForm::default(),
             sheet_options: SheetOptions::default(),
             export_scale: 1,
@@ -736,7 +740,7 @@ impl App {
     fn collect_generation(&mut self) {
         let Some(job) = &self.diffusion else { return };
         let Some(result) = job.poll() else { return };
-        let (prompt, target) = (job.prompt.clone(), job.document);
+        let (name, target) = (job.layer_name.clone(), job.document);
         self.diffusion = None;
         let Some(index) = self.index_of(target) else {
             self.status = "A generation finished, but its document has been closed".into();
@@ -744,7 +748,6 @@ impl App {
         };
         match result {
             Ok(image) => {
-                let name: String = format!("✨ {}", prompt.chars().take(24).collect::<String>());
                 let outcome = self.documents[index].studio.editor.execute(Command::ImportLayer { name, image });
                 self.status = match outcome {
                     Ok(summary) => capitalise(&summary),
@@ -882,6 +885,19 @@ impl Workspace for Tabs<'_> {
         if self.in_undo_group {
             self.studio().editor.begin_undo_group();
         }
+    }
+
+    /// Generates on a worker thread, exactly like the Generate button, so
+    /// the window keeps painting while the model works.
+    fn generate(&mut self, request: Request) -> Result<String, String> {
+        if self.app.diffusion.is_some() {
+            return Err("a generation is already running; try again once it has landed".into());
+        }
+        let (name, seed) = (request.layer_name.clone(), request.generation.seed);
+        let wake = self.app.repaint.clone();
+        self.app.diffusion = Some(DiffusionJob::start(self.target, request, move || wake.request_repaint()));
+        self.app.status = "Generating… the result arrives as a new layer, snapped to your palette".into();
+        Ok(format!("generating in the background (seed {seed}); it lands as a new layer \"{name}\" when it's done"))
     }
 }
 

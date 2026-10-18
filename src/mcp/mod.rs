@@ -19,6 +19,17 @@ pub trait Workspace {
     fn studio(&mut self) -> &mut Studio;
     /// Brings in a new studio, which becomes the one tools work on.
     fn open(&mut self, studio: Studio);
+
+    /// Runs a diffusion generation that lands as a new layer, and says
+    /// what happened. Alone on stdio there's nothing else to do, so this
+    /// waits for the picture. The app generates in the background instead,
+    /// so a slow model never freezes the window.
+    fn generate(&mut self, request: Request) -> Result<String, String> {
+        let image = request.run().map_err(|e| format!("{e:#}"))?;
+        let seed = request.generation.seed;
+        let outcome = self.studio().editor.execute(Command::ImportLayer { name: request.layer_name, image });
+        outcome.map(|summary| format!("{summary} (seed {seed})")).map_err(|e| e.to_string())
+    }
 }
 
 impl Workspace for Studio {
@@ -31,6 +42,8 @@ impl Workspace for Studio {
     }
 }
 
+use crate::ai::diffusion::Request;
+use crate::editor::Command;
 use crate::studio::Studio;
 use serde_json::{json, Value};
 use std::io::{BufRead, Write};

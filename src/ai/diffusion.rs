@@ -135,6 +135,29 @@ pub struct Generation {
     pub lora: Option<Lora>,
 }
 
+/// Everything one generation needs, from the backend to the layer the
+/// result becomes. The GUI form and the `generate_image` tool both build
+/// one, so a generation means the same thing wherever it starts.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Request {
+    pub backend: Backend,
+    pub generation: Generation,
+    pub landing: Landing,
+    pub layer_name: String,
+}
+
+impl Request {
+    /// Generates and pixelates, waiting for the backend.
+    pub fn run(&self) -> Result<Pixels> {
+        generate_sprite(&self.backend, &self.generation, &self.landing)
+    }
+}
+
+/// The layer name a generation gets when nobody chose one.
+pub fn layer_name_for(prompt: &str) -> String {
+    format!("✨ {}", prompt.chars().take(24).collect::<String>())
+}
+
 fn agent() -> ureq::Agent {
     ureq::Agent::config_builder().timeout_global(Some(Duration::from_secs(600))).build().into()
 }
