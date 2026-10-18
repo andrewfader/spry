@@ -6,6 +6,13 @@ animation, automatic sprite sheets, version history and notes. It's also
 built for working alongside AI: any LLM can drive it over MCP, and diffusion
 models can sketch ideas that land on your grid and in your palette.
 
+![Spry editing a two-layer, three-frame slime with the Layers, Timeline, Palette and Preview panels open](docs/screenshots/editor.png)
+
+The slime above is [`docs/screenshots/slime.spry`](docs/screenshots/slime.spry).
+Spry exported it as an [animated GIF](docs/screenshots/slime-bounce.gif) of
+its `bounce` tag and as a [sprite sheet](docs/screenshots/slime-sheet.png).
+The window shot comes from `spry capture`.
+
 - **Rules of the house:** [`CLAUDE.md`](CLAUDE.md)
 - **Product bible (features and acceptance scenarios):** [`docs/BIBLE.md`](docs/BIBLE.md)
 
