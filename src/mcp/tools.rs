@@ -446,7 +446,49 @@ fn scale_arg(args: &Value) -> u32 {
 // ----- dispatch -------------------------------------------------------------
 
 fn run(studio: &mut Studio, command: Command) -> ToolResult {
-    studio.editor.execute(command).map(ToolOutput::text).map_err(|e| e.to_string())
+    let frame_reply = FrameReply::for_command(&command);
+    let summary = studio.editor.execute(command).map_err(|e| e.to_string())?;
+    Ok(ToolOutput::text(frame_reply.map_or(summary, |reply| reply.text(studio.editor.frame))))
+}
+
+/// What a frame command says it did, numbered the way the tools are.
+/// The editor's own summaries count frames from 1 to match the timeline
+/// people see, but a model picks frames by 0-based index, so telling it
+/// "frame 2" right after it selected index 1 sends it to the wrong frame.
+enum FrameReply {
+    Added,
+    Current,
+    Linked { to_frame: usize },
+    Moved { to: usize },
+    Noted { frame: usize },
+    Tagged { name: String, from: usize, to: usize },
+}
+
+impl FrameReply {
+    fn for_command(command: &Command) -> Option<FrameReply> {
+        Some(match command {
+            Command::AddFrame | Command::DuplicateFrame { .. } => FrameReply::Added,
+            Command::SelectFrame { .. } => FrameReply::Current,
+            Command::LinkCel { to_frame } => FrameReply::Linked { to_frame: *to_frame },
+            Command::MoveFrame { to } => FrameReply::Moved { to: *to },
+            Command::SetFrameNote { frame, .. } => FrameReply::Noted { frame: *frame },
+            Command::AddTag { name, from, to, .. } => FrameReply::Tagged { name: name.clone(), from: *from, to: *to },
+            _ => return None,
+        })
+    }
+
+    /// The reply once the command has run, when `current` is the frame
+    /// the editor ended up on.
+    fn text(self, current: usize) -> String {
+        match self {
+            FrameReply::Added => format!("added frame {current}"),
+            FrameReply::Current => format!("frame {current} is current"),
+            FrameReply::Linked { to_frame } => format!("linked frame {current}'s cel to frame {to_frame}"),
+            FrameReply::Moved { to } => format!("moved the frame to index {to}"),
+            FrameReply::Noted { frame } => format!("updated the note on frame {frame}"),
+            FrameReply::Tagged { name, from, to } => format!("tagged frames {from}–{to} as \"{name}\""),
+        }
+    }
 }
 
 /// Points the editor at the `layer`/`frame` named in the arguments, if any.

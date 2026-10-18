@@ -242,6 +242,31 @@ fn generate_image_queues_your_comfyui_workflow_and_lands_the_picture() {
     assert_eq!(image.get(16, 28), RED);
 }
 
+fn said(result: &Value) -> String {
+    result["content"][0]["text"].as_str().unwrap_or_default().to_string()
+}
+
+#[test]
+fn replies_name_frames_by_the_same_zero_based_index_the_tools_take() {
+    let mut session = McpSession::launch(&[]);
+    session.request("initialize", json!({}));
+    session.call("new_document", json!({ "width": 8, "height": 8 }));
+    session.call("draw_rect", json!({ "from": [0, 0], "to": [3, 3], "filled": true, "colour": "#ff004d" }));
+
+    assert_eq!(said(&session.call("add_frame", json!({ "copy": true }))), "added frame 1");
+    assert_eq!(said(&session.call("clone_frame", json!({}))), "added frame 2");
+    assert_eq!(said(&session.call("select_frame", json!({ "index": 1 }))), "frame 1 is current");
+    let linked = session.call("run_command", json!({ "command": { "command": "link_cel", "to_frame": 0 } }));
+    assert_eq!(said(&linked), "linked frame 1's cel to frame 0");
+    let moved = session.call("run_command", json!({ "command": { "command": "move_frame", "to": 2 } }));
+    assert_eq!(said(&moved), "moved the frame to index 2");
+    let noted = session
+        .call("run_command", json!({ "command": { "command": "set_frame_note", "frame": 0, "text": "contact" } }));
+    assert_eq!(said(&noted), "updated the note on frame 0");
+    let tagged = session.call("add_tag", json!({ "name": "trot", "from": 0, "to": 2, "direction": "ping_pong" }));
+    assert_eq!(said(&tagged), "tagged frames 0–2 as \"trot\"");
+}
+
 #[test]
 fn tool_mistakes_come_back_as_readable_errors_not_crashes() {
     let mut session = McpSession::launch(&[]);
