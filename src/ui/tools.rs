@@ -21,11 +21,12 @@ pub enum Tool {
     Lasso,
     Wand,
     Move,
+    Tile,
     Pin,
 }
 
 impl Tool {
-    pub const ALL: [Tool; 17] = [
+    pub const ALL: [Tool; 18] = [
         Tool::Pencil,
         Tool::Eraser,
         Tool::Dither,
@@ -42,6 +43,7 @@ impl Tool {
         Tool::Lasso,
         Tool::Wand,
         Tool::Move,
+        Tool::Tile,
         Tool::Pin,
     ];
 
@@ -63,6 +65,7 @@ impl Tool {
             Tool::Lasso => "➰",
             Tool::Wand => "✨",
             Tool::Move => "✚",
+            Tool::Tile => "⊞",
             Tool::Pin => "📌",
         }
     }
@@ -85,6 +88,7 @@ impl Tool {
             Tool::Lasso => "Lasso select",
             Tool::Wand => "Magic wand",
             Tool::Move => "Move selection",
+            Tool::Tile => "Place tiles",
             Tool::Pin => "Pin a note",
         }
     }
@@ -108,6 +112,7 @@ impl Tool {
             Tool::Lasso => Key::Q,
             Tool::Wand => Key::W,
             Tool::Move => Key::V,
+            Tool::Tile => Key::T,
             Tool::Gradient | Tool::Pin => return None,
         })
     }
@@ -141,6 +146,12 @@ pub struct ToolSettings {
     /// The clone stamp's source offset, set with Alt-click.
     pub clone_offset: Option<(i32, i32)>,
     pub clone_anchor: Option<(i32, i32)>,
+    /// The tile the Tile tool places, and how it's mirrored.
+    pub tile: u32,
+    pub tile_flip_x: bool,
+    pub tile_flip_y: bool,
+    /// Tile size for new tilemap layers and for cutting a layer into tiles.
+    pub tile_size: (u32, u32),
 }
 
 impl Default for ToolSettings {
@@ -160,6 +171,10 @@ impl Default for ToolSettings {
             shade_lightens: true,
             clone_offset: None,
             clone_anchor: None,
+            tile: 1,
+            tile_flip_x: false,
+            tile_flip_y: false,
+            tile_size: (16, 16),
         }
     }
 }

@@ -664,9 +664,65 @@ impl App {
                 }
             });
         }
+        self.tiles_section(ui, &mut commands);
         for command in commands {
             self.edit(command);
         }
+    }
+
+    /// Tile size, making tilemap layers, and on a tilemap layer the tile
+    /// picker for the Tile tool.
+    fn tiles_section(&mut self, ui: &mut egui::Ui, commands: &mut Vec<Command>) {
+        ui.separator();
+        let editor = &self.documents[self.active].studio.editor;
+        let sprite = editor.sprite();
+        let current = &sprite.layers[editor.layer];
+        let is_image = current.kind == crate::editor::LayerKind::Image;
+        let tileset = sprite.tilemap_of(LayerIndex(editor.layer)).and_then(|id| sprite.tileset(id)).cloned();
+        let (revision, prefix) = (editor.revision, self.documents[self.active].texture_prefix());
+        ui.horizontal(|ui| {
+            ui.label("Tiles");
+            ui.add(egui::DragValue::new(&mut self.tools.tile_size.0).range(1..=256).suffix(" px"));
+            ui.label("×");
+            ui.add(egui::DragValue::new(&mut self.tools.tile_size.1).range(1..=256).suffix(" px"));
+        });
+        let (tile_width, tile_height) = self.tools.tile_size;
+        ui.horizontal(|ui| {
+            if ui.button("⊞ New tilemap layer").clicked() {
+                commands.push(Command::AddTilemapLayer { name: None, tileset: None, tile_width, tile_height });
+            }
+            let cut = ui.add_enabled(is_image, egui::Button::new("✂ Cut into tiles"));
+            if cut.on_hover_text("Turn this layer into a tilemap; identical tiles are stored once").clicked() {
+                commands.push(Command::ConvertToTilemap { tile_width, tile_height });
+            }
+        });
+        let Some(tileset) = tileset else { return };
+        ui.weak(format!(
+            "{}: {} tiles of {}×{} · T places, right-click clears",
+            tileset.name,
+            tileset.tiles.len() - 1,
+            tileset.tile_width,
+            tileset.tile_height
+        ));
+        ui.horizontal(|ui| {
+            ui.toggle_value(&mut self.tools.tile_flip_x, "↔").on_hover_text("Place mirrored left ↔ right");
+            ui.toggle_value(&mut self.tools.tile_flip_y, "↕").on_hover_text("Place mirrored top ↕ bottom");
+        });
+        let ctx = ui.ctx().clone();
+        egui::ScrollArea::vertical().max_height(140.0).show(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                for (index, tile) in tileset.tiles.iter().enumerate().skip(1) {
+                    let key = format!("{prefix}tileset{}tile{index}", tileset.id.0);
+                    let texture = self.textures.get(&ctx, &key, revision, || (**tile).clone()).id();
+                    let chosen = self.tools.tile == index as u32 && self.tools.tool == Tool::Tile;
+                    let button = egui::ImageButton::new((texture, Vec2::splat(28.0))).selected(chosen);
+                    if ui.add(button).on_hover_text(format!("Tile {index}")).clicked() {
+                        self.tools.tile = index as u32;
+                        self.tools.tool = Tool::Tile;
+                    }
+                }
+            });
+        });
     }
 
     // ----- palette ------------------------------------------------------
@@ -1312,6 +1368,10 @@ impl App {
             if webp.clicked() {
                 actions.push(Action::ExportAnimatedWebp);
             }
+            let tiles = ui.button("Tileset…").on_hover_text("The tiles as a PNG, plus every tilemap's grid as JSON");
+            if tiles.clicked() {
+                actions.push(Action::ExportTileset);
+            }
             if ui.button("PNG sequence…").clicked() {
                 actions.push(Action::ExportSequence);
             }
@@ -1619,6 +1679,7 @@ fn palette_entries(primary: Rgba) -> Vec<(String, Action)> {
         ("Export animated PNG (APNG)".into(), Action::ExportApng),
         ("Export WebP".into(), Action::ExportWebp),
         ("Export animated WebP".into(), Action::ExportAnimatedWebp),
+        ("Export tileset and maps".into(), Action::ExportTileset),
         ("Export sprite sheet".into(), Action::ExportSheet),
         ("Export PNG sequence".into(), Action::ExportSequence),
         ("Import sprite sheet".into(), Action::ImportSheet),
@@ -1669,6 +1730,12 @@ fn palette_entries(primary: Rgba) -> Vec<(String, Action)> {
         ("Extract palette from sprite", Command::ExtractPalette),
         ("Add layer", Command::AddLayer { name: None }),
         ("Add layer group", Command::AddGroup { name: None }),
+        (
+            "Add tilemap layer (16×16 tiles)",
+            Command::AddTilemapLayer { name: None, tileset: None, tile_width: 16, tile_height: 16 },
+        ),
+        ("Cut layer into 16×16 tiles", Command::ConvertToTilemap { tile_width: 16, tile_height: 16 }),
+        ("Cut layer into 8×8 tiles", Command::ConvertToTilemap { tile_width: 8, tile_height: 8 }),
         ("Duplicate layer", Command::DuplicateLayer),
         ("Merge layer down", Command::MergeDown),
         ("Delete layer", Command::RemoveLayer),
@@ -1789,6 +1856,7 @@ mod tests {
             Action::ExportApng,
             Action::ExportWebp,
             Action::ExportAnimatedWebp,
+            Action::ExportTileset,
             Action::ExportSheet,
             Action::ExportSequence,
             Action::ImportSheet,
@@ -1822,6 +1890,7 @@ mod tests {
                 | Action::ExportApng
                 | Action::ExportWebp
                 | Action::ExportAnimatedWebp
+                | Action::ExportTileset
                 | Action::ExportSheet
                 | Action::ExportSequence
                 | Action::ImportSheet

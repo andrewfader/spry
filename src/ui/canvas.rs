@@ -10,6 +10,7 @@ use super::textures::TextureCache;
 use super::theme::{self, Appearance};
 use super::tools::{Tool, ToolSettings};
 use crate::editor::raster::Point;
+use crate::editor::LayerIndex;
 use crate::editor::{Command, Rect, StrokeKind};
 use crate::studio::Studio;
 use egui::{Color32, Pos2, Sense, Stroke, Vec2};
@@ -308,6 +309,12 @@ fn handle_tool(
                 editor.execute(Command::SelectWand { at, contiguous: settings.contiguous, add: shift }),
             ),
             Tool::Pin => requests.push(CanvasRequest::PinNoteAt(at)),
+            Tool::Tile => {
+                // A drag lays a row of tiles; it undoes as one step.
+                editor.begin_undo_group();
+                report(requests, editor.execute(place_tile(settings, at, secondary)));
+                view.gesture = Some(Gesture { tool, start: at, current: at, secondary });
+            }
             Tool::Move => {
                 editor.begin_undo_group();
                 if editor.floating.is_none() {
@@ -355,6 +362,8 @@ fn handle_tool(
             } else if gesture.tool == Tool::Move {
                 let (dx, dy) = (at.0 - gesture.current.0, at.1 - gesture.current.1);
                 report(requests, editor.execute(Command::MoveFloating { dx, dy }));
+            } else if gesture.tool == Tool::Tile {
+                report(requests, editor.execute(place_tile(settings, at, gesture.secondary)));
             } else if gesture.tool == Tool::Lasso {
                 view.lasso.push(at);
             }
@@ -391,7 +400,7 @@ fn finish_gesture(
             editor.finish_stroke();
             return;
         }
-        Tool::Move => {
+        Tool::Move | Tool::Tile => {
             editor.end_undo_group();
             return;
         }
@@ -411,6 +420,13 @@ fn report(requests: &mut Vec<CanvasRequest>, outcome: crate::editor::EditResult)
     if let Err(error) = outcome {
         requests.push(CanvasRequest::Status(error.to_string()));
     }
+}
+
+/// The Tile tool's placement at `at`: the chosen tile, or with a
+/// right-click, nothing (clearing the cell).
+fn place_tile(settings: &ToolSettings, at: Point, secondary: bool) -> Command {
+    let tile = if secondary { 0 } else { settings.tile };
+    Command::PlaceTile { at, tile, flip_x: settings.tile_flip_x, flip_y: settings.tile_flip_y }
 }
 
 /// The ink for a press, where a right-click paints with the secondary
@@ -469,6 +485,19 @@ fn paint_overlays(
         for y in 1..sprite.height {
             let sy = canvas_rect.top() + y as f32 * zoom;
             painter.line_segment([Pos2::new(canvas_rect.left(), sy), Pos2::new(canvas_rect.right(), sy)], grid);
+        }
+    }
+    // On a tilemap layer, the cells tiles snap to.
+    let tileset = sprite.tilemap_of(LayerIndex(editor.layer)).and_then(|id| sprite.tileset(id));
+    if let Some(tileset) = tileset.filter(|t| t.tile_width.min(t.tile_height) as f32 * zoom >= 6.0) {
+        let cells = Stroke::new(1.0_f32, colours.accent.gamma_multiply(0.7));
+        for x in (tileset.tile_width..sprite.width).step_by(tileset.tile_width as usize) {
+            let sx = canvas_rect.left() + x as f32 * zoom;
+            painter.line_segment([Pos2::new(sx, canvas_rect.top()), Pos2::new(sx, canvas_rect.bottom())], cells);
+        }
+        for y in (tileset.tile_height..sprite.height).step_by(tileset.tile_height as usize) {
+            let sy = canvas_rect.top() + y as f32 * zoom;
+            painter.line_segment([Pos2::new(canvas_rect.left(), sy), Pos2::new(canvas_rect.right(), sy)], cells);
         }
     }
     painter.rect_stroke(canvas_rect, 0.0, Stroke::new(1.0_f32, colours.edge), egui::StrokeKind::Outside);

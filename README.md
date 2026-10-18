@@ -46,6 +46,12 @@ fading with distance), a live preview, and timeline thumbnails. Opens
 palette, slices, and RGBA, grayscale and indexed colour, with groups, blend
 modes, cel opacity, tilesets and tilemap layers intact.
 
+**Tilesets.** Tilemap layers paint with a tileset: draw a tile once, place
+it anywhere with the Tile tool (T), and fixing it fixes every copy. Every
+drawing tool works on a tilemap. Cut an existing layer into tiles
+(identical ones stored once), mirror placements, share a tileset between
+layers, and export the tiles plus Tiled-style JSON maps.
+
 **Clones.** "Clone frame" makes linked cels: paint one and every linked cel
 changes. Unlink when you want them to part ways. There's also a clone stamp
 tool (Alt-click to pick the source).
@@ -76,7 +82,7 @@ trimming and duplicate merging) with Aseprite-format JSON (`frames`,
 `frameTags`, `slices`, plus Spry's `notes`). It can also import a sheet back
 into frames, detecting the grid from transparent gutters.
 
-**MCP.** `spry mcp [file]` serves 34 tools and the document and its frames as resources over stdio: drawing with
+**MCP.** `spry mcp [file]` serves 38 tools and the document and its frames as resources over stdio: drawing with
 colours, patterns and brushes, a text pixel grid, a rendered PNG the model can
 look at, layers, frames, clones, tags, palettes, notes, versions, exports,
 undo, and `run_command` for every other editor verb. In the app, enable

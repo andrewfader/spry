@@ -119,6 +119,7 @@ pub enum Action {
     ExportApng,
     ExportWebp,
     ExportAnimatedWebp,
+    ExportTileset,
     ExportSheet,
     ExportSequence,
     ImportSheet,
@@ -370,6 +371,9 @@ impl App {
             Action::ExportGif => self.browse(Purpose::ExportGif, &format!("{}.gif", self.studio().title())),
             Action::ExportApng => self.browse(Purpose::ExportApng, &format!("{}-anim.png", self.studio().title())),
             Action::ExportWebp => self.browse(Purpose::ExportWebp, &format!("{}.webp", self.studio().title())),
+            Action::ExportTileset => {
+                self.browse(Purpose::ExportTileset, &format!("{}-tiles.png", self.studio().title()))
+            }
             Action::ExportAnimatedWebp => {
                 self.browse(Purpose::ExportAnimatedWebp, &format!("{}-anim.webp", self.studio().title()))
             }
@@ -612,6 +616,10 @@ impl App {
                 io::export_apng(&path, &sprite, self.preview_tag.as_deref(), scale)
                     .map(|_| format!("Exported {}", path.display())),
             ),
+            Purpose::ExportTileset => report(io::tileset::export(&path, &sprite, None).map(|built| {
+                let count = built.json["tileset"]["tile_count"].as_u64().unwrap_or(0);
+                format!("Exported {count} tiles to {} with the maps in its .json", path.display())
+            })),
             Purpose::ExportAnimatedWebp => report(
                 io::export_animated_webp(&path, &sprite, self.preview_tag.as_deref(), scale)
                     .map(|_| format!("Exported {}", path.display())),
