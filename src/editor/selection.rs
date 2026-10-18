@@ -165,10 +165,12 @@ fn crossings_inside(closed: &[Point], centre_y: f32, width: u32) -> Vec<i32> {
         .collect();
     crossings.sort_by(f32::total_cmp);
     crossings
-        .chunks_exact(2)
-        .flat_map(|pair| {
-            let from = (pair[0] - 0.5).ceil().max(0.0) as i32;
-            let to = ((pair[1] - 0.5).floor() as i32).min(width as i32 - 1);
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .flat_map(|&[enter, leave]| {
+            let from = (enter - 0.5).ceil().max(0.0) as i32;
+            let to = ((leave - 0.5).floor() as i32).min(width as i32 - 1);
             from..=to
         })
         .collect()

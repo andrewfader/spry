@@ -21,9 +21,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
+      - name: Install the pinned toolchain from rust-toolchain.toml
+        run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
       - name: Install the Linux windowing headers eframe links against
         if: runner.os == 'Linux'

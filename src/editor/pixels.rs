@@ -85,7 +85,7 @@ impl Pixels {
         if Some(bytes.len()) != (width as usize).checked_mul(height as usize).and_then(|n| n.checked_mul(4)) {
             return None;
         }
-        let data = bytes.chunks_exact(4).map(|c| Rgba([c[0], c[1], c[2], c[3]])).collect();
+        let data = bytes.as_chunks::<4>().0.iter().map(|&c| Rgba(c)).collect();
         Some(Pixels { width, height, data })
     }
 

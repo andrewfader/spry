@@ -218,7 +218,7 @@ pub fn decode_animated_webp(bytes: &[u8]) -> Result<Vec<(Pixels, u32)>> {
         let image = if decoder.has_alpha() {
             Pixels::from_rgba_bytes(width, height, &buffer)
         } else {
-            let rgba: Vec<u8> = buffer.chunks_exact(3).flat_map(|c| [c[0], c[1], c[2], 255]).collect();
+            let rgba: Vec<u8> = buffer.as_chunks::<3>().0.iter().flat_map(|&[r, g, b]| [r, g, b, 255]).collect();
             Pixels::from_rgba_bytes(width, height, &rgba)
         };
         frames.push((image.context("WebP frame size mismatch")?, delay));

@@ -289,8 +289,8 @@ impl Decoder {
         check_canvas_size(columns.max(1), rows.max(1)).map_err(anyhow::Error::msg)?;
         let entries = inflate(chunk.rest(), columns as usize * rows as usize * 4)?;
         let (first_column, first_row) = (at.0.div_euclid(tile_width), at.1.div_euclid(tile_height));
-        for (position, entry) in entries.chunks_exact(4).enumerate() {
-            let entry = u32::from_le_bytes([entry[0], entry[1], entry[2], entry[3]]);
+        for (position, &entry) in entries.as_chunks::<4>().0.iter().enumerate() {
+            let entry = u32::from_le_bytes(entry);
             let index = entry & id_mask;
             if index == 0 {
                 continue;
