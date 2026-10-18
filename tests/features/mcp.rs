@@ -105,6 +105,7 @@ fn initialize_then_list_every_tool_with_a_schema() {
         "export_png",
         "export_gif",
         "export_sheet",
+        "import_image",
         "undo",
         "redo",
     ] {
@@ -155,6 +156,41 @@ fn an_agent_can_build_save_and_export_a_whole_animation() {
     assert_eq!(reopened.editor.sprite().frame_count(), 3);
     assert_eq!(reopened.editor.sprite().tags[0].name, "bob");
     assert!(sheet.with_extension("json").exists());
+}
+
+/// What a generator paints: a 200×50 red bar in a wide white margin.
+fn bar_on_white() -> spry::editor::Pixels {
+    let mut picture = spry::editor::Pixels::filled(400, 200, spry::editor::Rgba::WHITE);
+    for (x, y) in spry::editor::Rect::new(100, 60, 200, 50).points() {
+        picture.set(x, y, RED);
+    }
+    picture
+}
+
+fn rendered(session: &mut McpSession) -> spry::editor::Pixels {
+    let rendered = session.call("render_png", json!({ "scale": 1 }));
+    let image = rendered["content"].as_array().unwrap().iter().find(|b| b["type"] == "image").expect("an image");
+    let png = base64::engine::general_purpose::STANDARD.decode(image["data"].as_str().unwrap()).unwrap();
+    spry::io::decode_image(&png).unwrap()
+}
+
+#[test]
+fn an_imported_picture_lands_as_a_layer_fitted_to_its_subject() {
+    let folder = tempfile::tempdir().unwrap();
+    let picture = folder.path().join("bar.png");
+    std::fs::write(&picture, spry::io::encode_png(&bar_on_white()).unwrap()).unwrap();
+    let mut session = McpSession::launch(&[]);
+    session.request("initialize", json!({}));
+    session.call("new_document", json!({ "width": 32, "height": 32, "palette": "PICO-8" }));
+
+    let imported = session.call("import_image", json!({ "path": picture.to_str().unwrap() }));
+
+    assert_eq!(imported["isError"], false, "{imported}");
+    let info = session.call("document_info", json!({}));
+    assert!(info["content"][0]["text"].as_str().unwrap().contains("bar"), "{info}");
+    let image = rendered(&mut session);
+    assert_eq!(image.opaque_bounds(), Some(spry::editor::Rect::new(0, 24, 32, 8)));
+    assert_eq!(image.get(16, 28), RED);
 }
 
 #[test]

@@ -8,8 +8,8 @@
 //! checkpoints and LoRAs. Whatever comes back goes through
 //! `editor::pixelate`, so it lands on your grid and in your palette.
 
-use crate::editor::pixelate::{pixelate, pixelate_subject, Fit};
-use crate::editor::{Palette, Pixels};
+pub use crate::editor::pixelate::Landing;
+use crate::editor::Pixels;
 use crate::io::{decode_image, encode_png};
 use anyhow::{bail, Context, Result};
 use base64::Engine;
@@ -133,30 +133,6 @@ pub struct Generation {
     /// shape instead of a square that gets squashed.
     pub canvas: (u32, u32),
     pub lora: Option<Lora>,
-}
-
-/// What to do with the generated picture once it arrives.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Landing {
-    pub width: u32,
-    pub height: u32,
-    pub palette: Palette,
-    pub clear_background: bool,
-    pub dither: bool,
-    pub fit: Fit,
-}
-
-impl Landing {
-    /// Runs a picture through the pixelise pipeline onto the grid and
-    /// palette, which is how both generated and imported pictures arrive.
-    pub fn land(&self, picture: &Pixels) -> Pixels {
-        match self.fit {
-            Fit::Canvas => {
-                pixelate(picture, self.width, self.height, &self.palette, self.clear_background, self.dither)
-            }
-            Fit::Subject => pixelate_subject(picture, self.width, self.height, &self.palette, self.dither),
-        }
-    }
 }
 
 fn agent() -> ureq::Agent {

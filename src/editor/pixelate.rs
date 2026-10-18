@@ -152,6 +152,31 @@ pub enum Fit {
     Subject,
 }
 
+/// Where a picture lands: the canvas it must fill, the palette it must
+/// use, and how to get there.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Landing {
+    pub width: u32,
+    pub height: u32,
+    pub palette: Palette,
+    pub clear_background: bool,
+    pub dither: bool,
+    pub fit: Fit,
+}
+
+impl Landing {
+    /// Runs a picture through the pipeline onto the grid and palette,
+    /// which is how both generated and imported pictures arrive.
+    pub fn land(&self, picture: &Pixels) -> Pixels {
+        match self.fit {
+            Fit::Canvas => {
+                pixelate(picture, self.width, self.height, &self.palette, self.clear_background, self.dither)
+            }
+            Fit::Subject => pixelate_subject(picture, self.width, self.height, &self.palette, self.dither),
+        }
+    }
+}
+
 /// The whole pipeline, from a generated picture to a sprite-ready layer.
 pub fn pixelate(
     image: &Pixels,

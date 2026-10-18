@@ -7,6 +7,7 @@
 //! undoable as a human one.
 
 use super::Workspace;
+use crate::editor::pixelate::{Fit, Landing};
 use crate::editor::BlendMode;
 use crate::editor::{Brush, Command, Ink, LoopDirection, Palette, Pattern, PixelValue, Rect, Rgba};
 use crate::editor::{FrameIndex, LayerIndex};
@@ -306,6 +307,11 @@ pub fn catalogue() -> Vec<ToolSpec> {
                 &["path"],
             ),
         },
+        ToolSpec {
+            name: "import_image",
+            description: "Bring a picture (PNG, JPEG, GIF…) in as a new layer on the current frame, shrunk onto the grid by dominant colour and snapped to the document's palette. By default the flat backdrop is cut away and the subject is fitted to the canvas, standing on the bottom edge.",
+            input_schema: object_schema(landing_properties(json!({ "path": { "type": "string" }, "name": { "type": "string", "description": "Layer name; defaults to the file's name" } })), &["path"]),
+        },
         ToolSpec { name: "undo", description: "Undo the last change.", input_schema: object_schema(json!({}), &[]) },
         ToolSpec { name: "redo", description: "Redo the last undone change.", input_schema: object_schema(json!({}), &[]) },
         ToolSpec {
@@ -317,6 +323,35 @@ pub fn catalogue() -> Vec<ToolSpec> {
 }
 
 // ----- argument helpers --------------------------------------------------
+
+/// The pixelise options shared by `import_image` and `generate_image`,
+/// added to a tool's own properties.
+fn landing_properties(mut properties: Value) -> Value {
+    properties["fit"] = json!({ "type": "string", "enum": ["subject", "canvas"], "description": "subject (default): cut the backdrop away and fit what's left, proportions kept; canvas: stretch the whole picture over the canvas" });
+    properties["clear_background"] =
+        json!({ "type": "boolean", "description": "With fit=canvas, clear the flat backdrop (default true)" });
+    properties["dither"] = json!({ "type": "boolean", "description": "Ordered-dither colours that fall between two palette entries (default false)" });
+    properties
+}
+
+/// Where a picture should land in this studio: its canvas and palette,
+/// with the options the arguments chose.
+fn landing(studio: &Studio, args: &Value) -> Result<Landing, String> {
+    let fit = match string(args, "fit") {
+        None | Some("subject") => Fit::Subject,
+        Some("canvas") => Fit::Canvas,
+        Some(other) => return Err(format!("`fit` is subject or canvas, not `{other}`")),
+    };
+    let sprite = studio.editor.sprite();
+    Ok(Landing {
+        width: sprite.width,
+        height: sprite.height,
+        palette: sprite.palette.clone(),
+        clear_background: flag(args, "clear_background").unwrap_or(true),
+        dither: flag(args, "dither").unwrap_or(false),
+        fit,
+    })
+}
 
 fn integer(args: &Value, key: &str) -> Option<i64> {
     args.get(key).and_then(Value::as_i64)
@@ -500,6 +535,7 @@ fn call_on_studio(studio: &mut Studio, name: &str, args: &Value) -> ToolResult {
             let count = built.json["tileset"]["tile_count"].as_u64().unwrap_or(0);
             Ok(ToolOutput::text(format!("wrote {} ({count} tiles) and its .json", path.display())))
         }
+        "import_image" => import_image(studio, args),
         "undo" => run(studio, Command::Undo),
         "redo" => run(studio, Command::Redo),
         "run_command" => {
@@ -512,6 +548,16 @@ fn call_on_studio(studio: &mut Studio, name: &str, args: &Value) -> ToolResult {
 }
 
 // ----- one function per tool that needs more than a line ----------------------
+
+fn import_image(studio: &mut Studio, args: &Value) -> ToolResult {
+    let path = path(args, "path")?;
+    let bytes = std::fs::read(&path).map_err(|e| format!("reading {}: {e}", path.display()))?;
+    let picture = io::decode_image(&bytes).map_err(|e| format!("{}: {e:#}", path.display()))?;
+    let stem = path.file_stem().and_then(|stem| stem.to_str()).unwrap_or("Imported");
+    let name = string(args, "name").unwrap_or(stem).to_string();
+    let image = landing(studio, args)?.land(&picture);
+    run(studio, Command::ImportLayer { name, image })
+}
 
 /// Runs a drawing command on the `layer`/`frame` the arguments name.
 fn targeted(studio: &mut Studio, args: &Value, command: impl FnOnce(&Value) -> Result<Command, String>) -> ToolResult {

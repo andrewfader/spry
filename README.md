@@ -82,10 +82,10 @@ trimming and duplicate merging) with Aseprite-format JSON (`frames`,
 `frameTags`, `slices`, plus Spry's `notes`). It can also import a sheet back
 into frames, detecting the grid from transparent gutters.
 
-**MCP.** `spry mcp [file]` serves 37 tools and the document and its frames as resources over stdio: drawing with
+**MCP.** `spry mcp [file]` serves 40 tools and the document and its frames as resources over stdio: drawing with
 colours, patterns and brushes, a text pixel grid, a rendered PNG the model can
 look at, layers, frames, clones, tags, palettes, notes, versions, exports,
-undo, and `run_command` for every other editor verb. In the app, enable
+picture import onto the grid and palette, undo, and `run_command` for every other editor verb. In the app, enable
 **Settings → MCP server** and an agent can paint into the open window while
 you watch:
 
@@ -107,7 +107,9 @@ Automatic1111, a LoraLoader node for ComfyUI). Images are generated in the
 canvas's shape, then downscaled by dominant colour, cleared of their
 backdrop, and quantised to your palette before they arrive as a new layer
 in the document they were asked for. img2img restyles the current frame on
-both backends. ComfyUI can also use your own exported API workflow.
+both backends. ComfyUI can also use your own exported API workflow. With
+**Fit the subject** on, the backdrop is cut away at full size and only the
+subject is shrunk, proportions kept, standing on the canvas's bottom edge.
 
 **Glass UI.** A luminous backdrop, frosted panels (a real GPU blur of what's
 behind them) you can float anywhere, remembered where you leave them,
