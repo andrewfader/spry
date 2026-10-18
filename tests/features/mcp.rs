@@ -302,3 +302,26 @@ fn the_document_and_its_frames_can_be_read_as_resources() {
     let templates = session.request("resources/templates/list", json!({}));
     assert_eq!(templates["result"]["resourceTemplates"][0]["uriTemplate"], "spry://frames/{frame}.png");
 }
+
+#[test]
+fn a_model_can_build_a_level_from_tiles() {
+    let mut scenario = given_a_blank_sprite(32, 16);
+    let ok = |result: Result<spry::mcp::tools::ToolOutput, String>| result.unwrap_or_else(|e| panic!("{e}")).text;
+    ok(scenario.tool("add_tilemap_layer", json!({ "name": "Ground", "tile_width": 8, "tile_height": 8 })));
+    ok(scenario.tool("draw_rect", json!({ "from": [0, 8], "to": [7, 15], "colour": "#008751", "filled": true })));
+    for x in [8, 16, 24] {
+        ok(scenario.tool("place_tile", json!({ "x": x, "y": 8, "tile": 1 })));
+    }
+    assert_eq!(
+        scenario.composite_pixel(0, 30, 12),
+        spry::editor::Rgba::rgb(0, 135, 81),
+        "the grass tile runs along the bottom"
+    );
+    let info = ok(scenario.tool("document_info", json!({})));
+    assert!(info.contains("tilemap (tileset 1) Ground") && info.contains("1 tiles of 8×8"), "{info}");
+    let path = scenario.path("level.png");
+    let wrote = ok(scenario.tool("export_tileset", json!({ "path": path.to_str().unwrap() })));
+    assert!(wrote.contains("1 tiles"), "{wrote}");
+    let refused = scenario.tool("place_tile", json!({ "x": 0, "y": 0, "tile": 5 })).err().unwrap();
+    assert!(refused.contains("tile 5"), "{refused}");
+}

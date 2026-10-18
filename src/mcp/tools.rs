@@ -196,6 +196,21 @@ pub fn catalogue() -> Vec<ToolSpec> {
             ),
         },
         ToolSpec {
+            name: "add_tilemap_layer",
+            description: "Add a tilemap layer above the current one. It paints with an existing `tileset` (an id from document_info), or a new empty tileset of tile_width × tile_height (default 16). Every drawing tool works on it: changed cells edit their tiles, and every copy of a tile updates.",
+            input_schema: object_schema(json!({ "name": { "type": "string" }, "tileset": { "type": "integer" }, "tile_width": { "type": "integer", "minimum": 1, "maximum": 256 }, "tile_height": { "type": "integer", "minimum": 1, "maximum": 256 } }), &[]),
+        },
+        ToolSpec {
+            name: "convert_to_tilemap",
+            description: "Cut the current image layer into tiles: it becomes a tilemap layer with a new tileset holding each distinct tile once.",
+            input_schema: object_schema(json!({ "tile_width": { "type": "integer", "minimum": 1, "maximum": 256 }, "tile_height": { "type": "integer", "minimum": 1, "maximum": 256 } }), &["tile_width", "tile_height"]),
+        },
+        ToolSpec {
+            name: "place_tile",
+            description: "Put tile number `tile` (0 clears) in the cell containing pixel (x, y) of the current tilemap layer, optionally mirrored.",
+            input_schema: object_schema(json!({ "x": { "type": "integer" }, "y": { "type": "integer" }, "tile": { "type": "integer", "minimum": 0 }, "flip_x": { "type": "boolean" }, "flip_y": { "type": "boolean" }, "layer": { "type": "integer" }, "frame": { "type": "integer" } }), &["x", "y", "tile"]),
+        },
+        ToolSpec {
             name: "select_layer",
             description: "Make a layer current.",
             input_schema: object_schema(json!({ "index": { "type": "integer" } }), &["index"]),
@@ -272,6 +287,11 @@ pub fn catalogue() -> Vec<ToolSpec> {
             name: "export_webp",
             description: "Write one frame as a lossless WebP, or with `animated` the whole animation (or one `tag`) with exact delays.",
             input_schema: object_schema(json!({ "path": { "type": "string" }, "frame": { "type": "integer" }, "animated": { "type": "boolean" }, "tag": { "type": "string" }, "scale": { "type": "integer", "minimum": 1 } }), &["path"]),
+        },
+        ToolSpec {
+            name: "export_tileset",
+            description: "Write a tileset as a PNG of its tiles plus JSON with every tilemap's grid (Tiled numbering: 0 empty, 1 = first tile; bits 31/30/29 flip x/y/diagonal). Defaults to the first tilemap layer's tileset.",
+            input_schema: object_schema(json!({ "path": { "type": "string" }, "tileset": { "type": "integer" } }), &["path"]),
         },
         ToolSpec {
             name: "export_sheet",
@@ -432,6 +452,30 @@ fn call_on_studio(studio: &mut Studio, name: &str, args: &Value) -> ToolResult {
         "add_layer" => run(studio, Command::AddLayer { name: string(args, "name").map(str::to_string) }),
         "add_group" => run(studio, Command::AddGroup { name: string(args, "name").map(str::to_string) }),
         "set_layer" => set_layer(studio, args),
+        "add_tilemap_layer" => run(
+            studio,
+            Command::AddTilemapLayer {
+                name: string(args, "name").map(str::to_string),
+                tileset: integer(args, "tileset").map(|id| id.max(0) as u32),
+                tile_width: integer(args, "tile_width").map_or(16, |w| w.clamp(0, u32::MAX as i64) as u32),
+                tile_height: integer(args, "tile_height").map_or(16, |h| h.clamp(0, u32::MAX as i64) as u32),
+            },
+        ),
+        "convert_to_tilemap" => run(
+            studio,
+            Command::ConvertToTilemap {
+                tile_width: required_integer(args, "tile_width")?.clamp(0, u32::MAX as i64) as u32,
+                tile_height: required_integer(args, "tile_height")?.clamp(0, u32::MAX as i64) as u32,
+            },
+        ),
+        "place_tile" => targeted(studio, args, |args| {
+            Ok(Command::PlaceTile {
+                at: (required_integer(args, "x")? as i32, required_integer(args, "y")? as i32),
+                tile: required_integer(args, "tile")?.clamp(0, u32::MAX as i64) as u32,
+                flip_x: flag(args, "flip_x").unwrap_or(false),
+                flip_y: flag(args, "flip_y").unwrap_or(false),
+            })
+        }),
         "select_layer" => run(studio, Command::SelectLayer { index: index_arg(args, "index")? }),
         "add_frame" => add_frame(studio, args),
         "clone_frame" => run(studio, Command::DuplicateFrame { as_clone: true }),
@@ -449,6 +493,13 @@ fn call_on_studio(studio: &mut Studio, name: &str, args: &Value) -> ToolResult {
         "export_gif" => export(studio, args, Export::Gif),
         "export_apng" => export(studio, args, Export::Apng),
         "export_sheet" => export_sheet(studio, args),
+        "export_tileset" => {
+            let path = export_path(args, "png")?;
+            let tileset = integer(args, "tileset").map(|id| crate::editor::tilemap::TilesetId(id.max(0) as u32));
+            let built = io::tileset::export(&path, studio.editor.sprite(), tileset).map_err(|e| format!("{e:#}"))?;
+            let count = built.json["tileset"]["tile_count"].as_u64().unwrap_or(0);
+            Ok(ToolOutput::text(format!("wrote {} ({count} tiles) and its .json", path.display())))
+        }
         "undo" => run(studio, Command::Undo),
         "redo" => run(studio, Command::Redo),
         "run_command" => {
@@ -716,7 +767,11 @@ pub(crate) fn describe(studio: &Studio) -> String {
                 .collect::<Vec<_>>();
             let marker = if i == editor.layer { " ← current" } else { "" };
             let flags = if flags.is_empty() { String::new() } else { format!(" ({})", flags.join(", ")) };
-            let kind = if l.is_group() { "group " } else { "" };
+            let kind = match l.kind {
+                crate::editor::LayerKind::Group => "group ".to_string(),
+                crate::editor::LayerKind::Tilemap { tileset } => format!("tilemap (tileset {}) ", tileset.0),
+                crate::editor::LayerKind::Image => String::new(),
+            };
             let indent = "  ".repeat(sprite.depth(i));
             let blend = if l.blend == BlendMode::Normal { String::new() } else { format!(", {}", l.blend.name()) };
             format!("  {indent}{i}: {kind}{}{flags}, opacity {}{blend}{marker}", l.name, l.opacity)
@@ -726,8 +781,15 @@ pub(crate) fn describe(studio: &Studio) -> String {
     let tags: Vec<String> =
         sprite.tags.iter().map(|t| format!("{} [{}–{}, {:?}]", t.name, t.from, t.to, t.direction)).collect();
     let palette: Vec<String> = sprite.palette.colours.iter().map(|c| c.to_hex()).collect();
+    let tilesets: Vec<String> = sprite
+        .tilesets
+        .iter()
+        .map(|t| {
+            format!("{}: \"{}\", {} tiles of {}×{}", t.id.0, t.name, t.tiles.len() - 1, t.tile_width, t.tile_height)
+        })
+        .collect();
     format!(
-        "\"{}\": {}×{} pixels\nlayers (0 = bottom):\n{}\nframes: {} (durations ms: {}), current frame {}\ntags: {}\npalette {}: {}\nversions: {}\nnotes: {}",
+        "\"{}\": {}×{} pixels\nlayers (0 = bottom):\n{}\nframes: {} (durations ms: {}), current frame {}\ntags: {}\ntilesets: {}\npalette {}: {}\nversions: {}\nnotes: {}",
         studio.title(),
         sprite.width,
         sprite.height,
@@ -736,6 +798,7 @@ pub(crate) fn describe(studio: &Studio) -> String {
         frames.join(", "),
         editor.frame,
         if tags.is_empty() { "none".into() } else { tags.join(", ") },
+        if tilesets.is_empty() { "none".into() } else { tilesets.join("; ") },
         sprite.palette.name,
         palette.join(" "),
         studio.editor.document.versions.len(),
