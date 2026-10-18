@@ -316,11 +316,12 @@ opens them (the published file spec) as new, unsaved documents.
   at their offsets (raw, compressed and linked, so clones stay clones) with
   their own opacity, tags with direction, the palette, slices, and RGBA,
   grayscale and indexed colour modes.
-- Changed on the way in, and named in the import report: tilemap layers
-  are drawn out tile by tile (with flips) into ordinary image layers, since
-  Spry has no tilesets, and slices keep only their first key.
-- Given a tilemap layer, when I open the file, then each tile's pixels sit
-  at its grid position, flipped as the map says.
+- Tilesets and tilemap layers come in as they are (see feature 21), flips
+  included. Changed on the way in, and named in the import report: slices
+  keep only their first key.
+- Given a tilemap layer, when I open the file, then it's still a tilemap
+  layer using its tileset, and each cell shows its tile, flipped as the map
+  says.
 - Given an Aseprite file with two layers, a cel offset by (2, 3) and a
   linked cel, when I open it, then the pixels sit at the offset, the linked
   frames share one image, and the layer names match.

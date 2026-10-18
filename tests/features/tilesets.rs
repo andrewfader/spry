@@ -127,3 +127,31 @@ fn resizing_the_canvas_moves_tilemaps_by_whole_cells() {
     assert_eq!(scenario.composite_pixel(0, 10, 10), BLUE);
     assert_eq!(scenario.sprite().validate(), Ok(()));
 }
+
+#[test]
+fn a_tileset_exports_as_an_image_and_tiled_style_maps() {
+    let mut scenario = two_identical_tiles();
+    scenario.when(Command::ConvertToTilemap { tile_width: 8, tile_height: 8 });
+    scenario.when(Command::PlaceTile { at: (8, 0), tile: 1, flip_x: true, flip_y: false });
+    let path = scenario.path("tiles.png");
+    spry::io::tileset::export(&path, scenario.sprite(), None).unwrap();
+
+    let image = spry::io::decode_image(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!((image.width(), image.height()), (8, 8), "one tile; the empty tile isn't drawn");
+    assert_eq!(image.get(2, 2), BLUE);
+    let json: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(path.with_extension("json")).unwrap()).unwrap();
+    assert_eq!(json["tileset"]["tile_count"], 1);
+    assert_eq!(
+        json["layers"][0]["frames"][0]["data"],
+        serde_json::json!([1, 0x8000_0001u32]),
+        "1 = first tile; bit 31 = mirrored"
+    );
+}
+
+#[test]
+fn exporting_tiles_from_a_sprite_without_a_tilemap_says_so() {
+    let scenario = two_identical_tiles();
+    let error = spry::io::tileset::export(&scenario.path("tiles.png"), scenario.sprite(), None).err().unwrap();
+    assert!(error.to_string().contains("no tilemap layer"));
+}

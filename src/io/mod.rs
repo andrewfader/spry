@@ -5,6 +5,7 @@ pub mod aseprite;
 pub mod raster_formats;
 pub mod sheet;
 pub mod spry_file;
+pub mod tileset;
 
 use crate::editor::{limits, Document, Palette, Pixels, Sprite};
 use crate::editor::{FrameIndex, LayerIndex};

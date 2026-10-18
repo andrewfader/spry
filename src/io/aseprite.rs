@@ -3,18 +3,19 @@
 //!
 //! An Aseprite file is a 128-byte header, then one block per frame, each
 //! holding typed chunks: layers, cels, tags, palette, slices and more.
-//! Spry keeps groups, blend modes and cel opacity as they are. Tilemap
-//! layers are drawn out tile by tile into ordinary image layers, since
-//! Spry has no tilesets. Anything changed on the way in is named in the
+//! Spry keeps groups, blend modes, cel opacity, tilesets and tilemap
+//! layers as they are. Anything changed on the way in is named in the
 //! import's `notices`, so nothing disappears without a word.
 //!
 //! Every length in the file is checked before it's trusted: a truncated or
 //! hostile file is an error, never a panic or a huge allocation.
 
-use crate::editor::limits::check_canvas_size;
+use crate::editor::limits::{check_canvas_size, check_tile_size};
 use crate::editor::palette::Palette;
 use crate::editor::sprite::{Cel, LayerId, LayerKind, LoopDirection, Slice, Tag};
+use crate::editor::tilemap::{TileRef, TilesetId};
 use crate::editor::{BlendMode, Document, Pixels, Rect, Rgba, Sprite};
+use crate::editor::{FrameIndex, LayerIndex};
 use anyhow::{bail, ensure, Context, Result};
 use std::collections::HashMap;
 use std::io::Read;
@@ -62,11 +63,14 @@ impl ColourDepth {
     }
 }
 
-/// What a tilemap layer needs to be drawn as pixels.
-struct Tileset {
+/// Where an Aseprite tileset went in the sprite.
+struct ImportedTileset {
+    id: TilesetId,
     tile_width: u32,
     tile_height: u32,
-    tiles: Vec<Pixels>,
+    /// Spry's tile 0 is always empty. When the file's tile 0 isn't, every
+    /// tile moves up one.
+    shift: u32,
 }
 
 struct Decoder {
@@ -78,9 +82,7 @@ struct Decoder {
     layer_slots: Vec<LayerId>,
     /// The innermost group at each child level, as the layers go by.
     open_groups: Vec<LayerId>,
-    tilesets: HashMap<u32, Tileset>,
-    /// Which tileset each tilemap layer draws from.
-    tilemap_layers: HashMap<LayerId, u32>,
+    tilesets: HashMap<u32, ImportedTileset>,
     palette: Vec<Rgba>,
     /// Tags name frame ranges, so they wait until every frame exists.
     /// Added earlier, inserting later frames would shift them.
@@ -99,7 +101,6 @@ pub fn decode(bytes: &[u8]) -> Result<Import> {
         layer_slots: Vec::new(),
         open_groups: Vec::new(),
         tilesets: HashMap::new(),
-        tilemap_layers: HashMap::new(),
         palette: Vec::new(),
         tags: Vec::new(),
         notices: Vec::new(),
@@ -216,8 +217,11 @@ impl Decoder {
             }
             2 => {
                 let tileset = chunk.dword()?;
-                self.tilemap_layers.insert(id, tileset);
-                self.notices.push(format!("tilemap layer \"{name}\" was drawn out into an ordinary layer"));
+                let imported = self
+                    .tilesets
+                    .get(&tileset)
+                    .with_context(|| format!("layer \"{name}\" uses tileset {tileset}, which isn't in the file"))?;
+                layer.kind = LayerKind::Tilemap { tileset: imported.id };
             }
             _ => {}
         }
@@ -252,7 +256,13 @@ impl Decoder {
                 self.sprite.layers[layer].cels[frame] = shared.map(|cel| Cel { opacity, ..cel });
                 return Ok(());
             }
-            3 => self.tilemap_pixels(chunk, id)?,
+            3 => {
+                self.read_tilemap_cel(chunk, layer, frame, (x, y))?;
+                if let Some(cel) = self.sprite.layers[layer].cels[frame].as_mut() {
+                    cel.opacity = opacity;
+                }
+                return Ok(());
+            }
             other => bail!("unknown cel type {other}"),
         };
         let mut image = Pixels::new(self.sprite.width, self.sprite.height);
@@ -262,39 +272,41 @@ impl Decoder {
         Ok(())
     }
 
-    /// Draws a tilemap cel out of its tileset: each 32-bit entry names a
-    /// tile (0 is the empty tile) and may flip it.
-    fn tilemap_pixels(&self, chunk: &mut Reader, layer: LayerId) -> Result<Pixels> {
+    /// A tilemap cel: a grid of 32-bit entries, each a tile number plus
+    /// flip bits under the masks the cel gives. The grid sits at the cel's
+    /// offset, in whole cells.
+    fn read_tilemap_cel(&mut self, chunk: &mut Reader, layer: usize, frame: usize, at: (i32, i32)) -> Result<()> {
         let (columns, rows) = (u32::from(chunk.word()?), u32::from(chunk.word()?));
         let bits = chunk.word()?;
         ensure!(bits == 32, "tilemaps with {bits}-bit tiles aren't in the spec Spry follows");
         let (id_mask, x_flip, y_flip, diagonal_flip) = (chunk.dword()?, chunk.dword()?, chunk.dword()?, chunk.dword()?);
         chunk.skip(10)?;
-        let tileset_id = self.tilemap_layers.get(&layer).context("a tilemap cel is on a layer that isn't a tilemap")?;
-        let tileset = self.tilesets.get(tileset_id).with_context(|| format!("tileset {tileset_id} is missing"))?;
-        let (width, height) = (columns * tileset.tile_width, rows * tileset.tile_height);
-        check_canvas_size(width.max(1), height.max(1)).map_err(anyhow::Error::msg)?;
+        let tileset_id =
+            self.sprite.tilemap_of(LayerIndex(layer)).context("a tilemap cel is on a layer that isn't a tilemap")?;
+        let imported = self.tilesets.values().find(|t| t.id == tileset_id).context("a tilemap's tileset is missing")?;
+        let (shift, tile_width, tile_height) =
+            (imported.shift, imported.tile_width as i32, imported.tile_height as i32);
+        check_canvas_size(columns.max(1), rows.max(1)).map_err(anyhow::Error::msg)?;
         let entries = inflate(chunk.rest(), columns as usize * rows as usize * 4)?;
-        let mut out = Pixels::new(width, height);
+        let (first_column, first_row) = (at.0.div_euclid(tile_width), at.1.div_euclid(tile_height));
         for (position, entry) in entries.chunks_exact(4).enumerate() {
             let entry = u32::from_le_bytes([entry[0], entry[1], entry[2], entry[3]]);
-            let Some(tile) = tileset.tiles.get((entry & id_mask) as usize).filter(|_| entry & id_mask != 0) else {
+            let index = entry & id_mask;
+            if index == 0 {
                 continue;
-            };
-            let mut tile = tile.clone();
-            if entry & diagonal_flip != 0 {
-                tile = tile.rotated_clockwise().flipped_horizontally();
             }
-            if entry & x_flip != 0 {
-                tile = tile.flipped_horizontally();
+            let flags = [(x_flip, TileRef::FLIP_X), (y_flip, TileRef::FLIP_Y), (diagonal_flip, TileRef::DIAGONAL)]
+                .into_iter()
+                .filter(|(mask, _)| entry & mask != 0)
+                .fold(0, |bits, (_, flag)| bits | flag);
+            let column = first_column + (position as u32 % columns.max(1)) as i32;
+            let row = first_row + (position as u32 / columns.max(1)) as i32;
+            if column >= 0 && row >= 0 {
+                let reference = TileRef((index + shift) | flags);
+                self.sprite.set_tile(LayerIndex(layer), FrameIndex(frame), column as u32, row as u32, reference);
             }
-            if entry & y_flip != 0 {
-                tile = tile.flipped_vertically();
-            }
-            let (column, row) = (position as u32 % columns.max(1), position as u32 / columns.max(1));
-            out.paste(&tile, (column * tileset.tile_width) as i32, (row * tileset.tile_height) as i32);
         }
-        Ok(out)
+        Ok(())
     }
 
     fn read_tileset(&mut self, chunk: &mut Reader) -> Result<()> {
@@ -316,10 +328,20 @@ impl Decoder {
         check_canvas_size(tile_width.max(1), strip_height.max(1)).map_err(anyhow::Error::msg)?;
         let expected = tile_width as usize * strip_height as usize * self.depth.bytes_per_pixel();
         let strip = self.pixels_from(&inflate(chunk.take(length)?, expected)?, tile_width, strip_height)?;
-        let tiles = (0..count)
+        check_tile_size(tile_width, tile_height).map_err(anyhow::Error::msg)?;
+        let mut tiles: Vec<Pixels> = (0..count)
             .map(|tile| strip.crop(Rect::new(0, (tile * tile_height) as i32, tile_width, tile_height)))
             .collect();
-        self.tilesets.insert(id, Tileset { tile_width, tile_height, tiles });
+        // Aseprite's tile 0 is normally its empty tile, as Spry's is. If
+        // it isn't, keep it by moving every tile up one.
+        let shift = u32::from(tiles.first().is_some_and(|tile| !tile.is_blank()));
+        if shift == 1 || tiles.is_empty() {
+            tiles.insert(0, Pixels::new(tile_width, tile_height));
+        }
+        let spry_id = self.sprite.add_tileset(&name, tile_width, tile_height);
+        let tileset = self.sprite.tilesets.iter_mut().find(|t| t.id == spry_id).expect("just added");
+        tileset.tiles = tiles.into_iter().map(std::sync::Arc::new).collect();
+        self.tilesets.insert(id, ImportedTileset { id: spry_id, tile_width, tile_height, shift });
         Ok(())
     }
 

@@ -4,7 +4,8 @@
 //! by the small writer below, then opened through the real `Studio::open`.
 
 use crate::support::*;
-use spry::editor::{BlendMode, LoopDirection};
+use spry::editor::tilemap::TileRef;
+use spry::editor::{BlendMode, LayerKind, LoopDirection};
 use spry::studio::Studio;
 use std::io::Write;
 
@@ -310,7 +311,7 @@ fn groups_and_blend_modes_come_across_intact() {
 }
 
 #[test]
-fn tilemap_layers_are_drawn_out_tile_by_tile() {
+fn tilemap_layers_come_in_as_tilemaps_with_their_tilesets() {
     let scenario = given_a_blank_sprite(1, 1);
     // Two 2×2 tiles stacked in one strip: tile 0 is empty by convention,
     // tile 1 is solid red.
@@ -320,9 +321,14 @@ fn tilemap_layers_are_drawn_out_tile_by_tile() {
     let file = AsepriteFile::rgba(4, 4)
         .frame(100, vec![tileset(7, 2, 2, &strip), tilemap_layer("Ground", 7), tilemap_cel(0, (2, 2), &entries)]);
     let studio = Studio::open(&file.save_in(&scenario, "ground.aseprite")).unwrap();
-    let image = studio.editor.sprite().cel_image(LayerIndex(0), FrameIndex(0)).unwrap();
-    assert_eq!([image.get(0, 0), image.get(1, 1), image.get(2, 0), image.get(1, 2)], [RED, RED, CLEAR, RED]);
-    assert!(studio.notices.join(" ").contains("Ground"), "the change of kind is reported");
+    let sprite = studio.editor.sprite();
+    let LayerKind::Tilemap { tileset } = sprite.layers[0].kind else { panic!("Ground should stay a tilemap") };
+    assert_eq!(sprite.tileset(tileset).unwrap().tiles.len(), 2, "the empty tile and the red one");
+    let mirrored = sprite.tile_at(LayerIndex(0), FrameIndex(0), 0, 1);
+    assert_eq!((mirrored.index(), mirrored.0 & TileRef::FLIP_X != 0), (1, true), "flips come across");
+    let shown = sprite.composite(0);
+    assert_eq!([shown.get(0, 0), shown.get(1, 1), shown.get(2, 0), shown.get(1, 2)], [RED, RED, CLEAR, RED]);
+    assert!(studio.notices.is_empty(), "{:?}", studio.notices);
 }
 
 #[test]

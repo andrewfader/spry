@@ -44,8 +44,7 @@ forward / reverse / ping-pong loops, onion skin (up to 8 frames each way,
 fading with distance), a live preview, and timeline thumbnails. Opens
 `.aseprite` / `.ase` files: layers, cels and offsets, linked cels, tags,
 palette, slices, and RGBA, grayscale and indexed colour, with groups, blend
-modes and cel opacity intact. Tilemap layers are drawn out into image
-layers, and the import says so.
+modes, cel opacity, tilesets and tilemap layers intact.
 
 **Clones.** "Clone frame" makes linked cels: paint one and every linked cel
 changes. Unlink when you want them to part ways. There's also a clone stamp
