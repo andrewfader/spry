@@ -1,0 +1,81 @@
+# Pushing a tag like v0.1.0 tests and builds Spry for every desktop
+# platform, then publishes a GitHub Release with one archive per
+# platform and a SHA-256 checksum file. Nothing is published unless
+# every platform's tests pass.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu, archive: tar.gz, native: true }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc, archive: zip, native: true }
+          - { os: macos-latest, target: aarch64-apple-darwin, archive: tar.gz, native: true }
+          # Intel Macs: cross-built on the Apple Silicon runner. Its tests
+          # are the aarch64 job's, since the same code can't run here.
+          - { os: macos-latest, target: x86_64-apple-darwin, archive: tar.gz, native: false }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - name: Install the Linux windowing headers eframe links against
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev libgl1-mesa-dev
+      - name: Test
+        if: matrix.native
+        run: cargo test --target ${{ matrix.target }}
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }}
+      - name: Package
+        shell: bash
+        run: |
+          name="spry-${GITHUB_REF_NAME}-${{ matrix.target }}"
+          mkdir "$name"
+          cp README.md "$name"/
+          cp -r docs/workflows "$name"/
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp "target/${{ matrix.target }}/release/spry.exe" "$name"/
+            7z a "$name.zip" "$name" > /dev/null
+          else
+            cp "target/${{ matrix.target }}/release/spry" "$name"/
+            tar czf "$name.tar.gz" "$name"
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: spry-${{ matrix.target }}
+          path: spry-${{ github.ref_name }}-${{ matrix.target }}.${{ matrix.archive }}
+          if-no-files-found: error
+
+  publish:
+    name: Publish the release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum spry-* > SHA256SUMS
+      - name: Create the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --title "Spry $GITHUB_REF_NAME" --generate-notes

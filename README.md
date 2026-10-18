@@ -11,6 +11,11 @@ models can sketch ideas that land on your grid and in your palette.
 
 ## Run it
 
+Download a build for Linux (x86_64), Windows (x86_64) or macOS (Apple
+Silicon or Intel) from [Releases](https://github.com/andrewfader/spry/releases).
+Each one is built and tested by GitHub Actions when a `v*` tag is pushed,
+and comes with a `SHA256SUMS` file. Or build it yourself:
+
 ```sh
 cargo run --release                       # the editor
 cargo run --release -- hero.spry          # open a file (.spry, .aseprite, .png or .gif)
