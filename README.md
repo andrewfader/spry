@@ -82,7 +82,7 @@ trimming and duplicate merging) with Aseprite-format JSON (`frames`,
 `frameTags`, `slices`, plus Spry's `notes`). It can also import a sheet back
 into frames, detecting the grid from transparent gutters.
 
-**MCP.** `spry mcp [file]` serves 38 tools and the document and its frames as resources over stdio: drawing with
+**MCP.** `spry mcp [file]` serves 37 tools and the document and its frames as resources over stdio: drawing with
 colours, patterns and brushes, a text pixel grid, a rendered PNG the model can
 look at, layers, frames, clones, tags, palettes, notes, versions, exports,
 undo, and `run_command` for every other editor verb. In the app, enable
