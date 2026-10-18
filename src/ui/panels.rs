@@ -10,6 +10,7 @@ use super::workers::{ChatLine, DiffusionJob};
 use crate::ai::diffusion::{self, Generation, Landing};
 use crate::editor::dither::CLASSIC_PATTERNS;
 use crate::editor::limits::MAX_CANVAS_SIDE;
+use crate::editor::pixelate::Fit;
 use crate::editor::playback;
 use crate::editor::{BlendMode, Command, LoopDirection, Palette, Pattern, Rgba};
 use crate::editor::{FrameIndex, LayerIndex};
@@ -26,6 +27,7 @@ pub struct GenerateForm {
     pub strength: f32,
     pub clear_background: bool,
     pub dither: bool,
+    pub fit_subject: bool,
     pub use_lora: bool,
     pub lora_name: String,
     pub lora_weight: f32,
@@ -42,6 +44,7 @@ impl Default for GenerateForm {
             strength: 0.6,
             clear_background: true,
             dither: false,
+            fit_subject: true,
             use_lora: false,
             lora_name: String::new(),
             lora_weight: 1.0,
@@ -1290,6 +1293,7 @@ impl App {
         }
         ui.checkbox(&mut form.clear_background, "Remove flat background");
         ui.checkbox(&mut form.dither, "Dither to the palette");
+        ui.checkbox(&mut form.fit_subject, "Fit the subject to the canvas");
         let backend = self.settings.diffusion_backend();
         let backend_label = match &backend {
             Ok(diffusion::Backend::Automatic1111 { url }) => format!("Automatic1111 / Forge at {url}"),
@@ -1325,6 +1329,7 @@ impl App {
                 palette: sprite.palette.clone(),
                 clear_background: form.clear_background,
                 dither: form.dither,
+                fit: if form.fit_subject { Fit::Subject } else { Fit::Canvas },
             };
             let wake = ctx.clone();
             let document = self.document().id;

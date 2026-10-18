@@ -5,6 +5,7 @@ use crate::support::*;
 use base64::Engine;
 use serde_json::json;
 use spry::ai::diffusion::{self, Backend, Generation, Landing};
+use spry::editor::pixelate::Fit;
 use spry::editor::{Command, Palette, Pixels, Rect, Rgba};
 
 /// What a model might paint: a pink blob on a pale backdrop, 256×256.
@@ -59,7 +60,14 @@ fn queued_graph(server: &FakeServer) -> serde_json::Value {
 }
 
 fn pico8_landing(size: u32) -> Landing {
-    Landing { width: size, height: size, palette: Palette::pico8(), clear_background: true, dither: false }
+    Landing {
+        width: size,
+        height: size,
+        palette: Palette::pico8(),
+        clear_background: true,
+        dither: false,
+        fit: Fit::Canvas,
+    }
 }
 
 #[test]
@@ -211,4 +219,23 @@ fn a_lora_is_wired_into_the_comfyui_graph_between_checkpoint_and_sampler() {
     let prompts = graph.as_object().unwrap().values().filter(|node| node["class_type"] == "CLIPTextEncode");
     assert!(prompts.clone().all(|node| node["inputs"]["clip"][0] == json!(id)), "prompts read the LoRA's CLIP");
     assert!(prompts.into_iter().all(|node| !node["inputs"]["text"].as_str().unwrap().contains("<lora")));
+}
+
+#[test]
+fn fitting_to_the_subject_fills_the_frame_and_stands_on_the_bottom_row() {
+    let mut picture = Pixels::filled(400, 200, Rgba::WHITE);
+    for (x, y) in Rect::new(100, 60, 200, 50).points() {
+        picture.set(x, y, RED);
+    }
+    let png = spry::io::encode_png(&picture).unwrap();
+    let encoded = base64::engine::general_purpose::STANDARD.encode(png);
+    let server = FakeServer::start(move |_, _| Reply::json(json!({ "images": [encoded.clone()] })));
+    let landing = Landing { fit: Fit::Subject, ..pico8_landing(32) };
+
+    let sprite =
+        diffusion::generate_sprite(&Backend::Automatic1111 { url: server.url.clone() }, &generation("a bar"), &landing)
+            .unwrap();
+
+    assert_eq!(sprite.opaque_bounds(), Some(Rect::new(0, 24, 32, 8)));
+    assert!(sprite.colours().iter().all(|&c| c.is_transparent() || c == RED));
 }

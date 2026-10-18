@@ -8,7 +8,7 @@
 //! checkpoints and LoRAs. Whatever comes back goes through
 //! `editor::pixelate`, so it lands on your grid and in your palette.
 
-use crate::editor::pixelate::pixelate;
+use crate::editor::pixelate::{pixelate, pixelate_subject, Fit};
 use crate::editor::{Palette, Pixels};
 use crate::io::{decode_image, encode_png};
 use anyhow::{bail, Context, Result};
@@ -143,6 +143,20 @@ pub struct Landing {
     pub palette: Palette,
     pub clear_background: bool,
     pub dither: bool,
+    pub fit: Fit,
+}
+
+impl Landing {
+    /// Runs a picture through the pixelise pipeline onto the grid and
+    /// palette, which is how both generated and imported pictures arrive.
+    pub fn land(&self, picture: &Pixels) -> Pixels {
+        match self.fit {
+            Fit::Canvas => {
+                pixelate(picture, self.width, self.height, &self.palette, self.clear_background, self.dither)
+            }
+            Fit::Subject => pixelate_subject(picture, self.width, self.height, &self.palette, self.dither),
+        }
+    }
 }
 
 fn agent() -> ureq::Agent {
@@ -174,7 +188,7 @@ pub fn generate_raw(backend: &Backend, generation: &Generation) -> Result<Pixels
 /// layer.
 pub fn generate_sprite(backend: &Backend, generation: &Generation, landing: &Landing) -> Result<Pixels> {
     let raw = generate_raw(backend, generation)?;
-    Ok(pixelate(&raw, landing.width, landing.height, &landing.palette, landing.clear_background, landing.dither))
+    Ok(landing.land(&raw))
 }
 
 fn full_prompt(generation: &Generation) -> String {

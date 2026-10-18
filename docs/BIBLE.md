@@ -249,7 +249,8 @@ file.
   `dither_fill`, `get_pixels`, `render_png` (returns an MCP image), `add_layer`,
   `add_frame`, `clone_frame`, `set_palette`, `add_tag`, `add_note`,
   `list_notes`, `commit_version`, `list_versions`, `restore_version`,
-  `export_png`, `export_gif`, `export_sheet`, `undo`, `redo`.
+  `export_png`, `export_gif`, `export_sheet`, `import_image`,
+  `generate_image`, `undo`, `redo`.
 - Given the `spry mcp` binary, when a client sends `initialize` then
   `tools/list`, then every tool above is listed with a JSON schema.
 - Given a session, when the client calls `draw_rect` then `render_png`, then
@@ -274,10 +275,30 @@ file.
   block → optional background removal (flood from the corners) → quantise to
   the document palette (nearest in Oklab) with optional ordered dither. The
   result lands as a new layer.
+- **Fit to the subject:** instead of squashing the whole picture onto the
+  canvas, cut the backdrop away at full size, crop to what's left, and
+  shrink that to fit the canvas with its proportions kept, standing centred
+  on the bottom edge. Models paint small subjects in wide margins, and this
+  turns them into a sprite that fills its frame.
 - img2img from the current frame ("restyle this sprite").
+- **Import a picture** (a PNG from any generator, or a reference) as a new
+  layer through the same pipeline.
+- Both are MCP tools, `generate_image` and `import_image`, so an LLM can
+  sketch with diffusion too. Over stdio, `generate_image` waits for the
+  picture. In the app it runs in the background, like the Generate button,
+  and lands as a new layer when it's done.
 - Given a fake A1111 server returning a 256×256 two-colour image, when I
   generate into a 32×32 document with the PICO-8 palette, then a new layer
   appears whose pixels are all PICO-8 colours.
+- Given a 400×200 picture of a 200×50 red bar on white, when I fit it to
+  the subject on a 32×32 canvas, then the bar is 32 wide and 8 tall and
+  stands on the bottom row.
+- Given the `spry mcp` binary and a fake ComfyUI, when a client calls
+  `generate_image` with its own workflow file, then the workflow is queued
+  with the prompt and seed filled in, and the picture lands as a new layer
+  in the document's palette.
+- Given a PNG on disk, when a client calls `import_image`, then it lands as
+  a new layer fitted to the subject and snapped to the palette.
 
 ### 18. Glass UI (`ui` module; scenario-tested through `editor` commands)
 - A soft gradient backdrop. Translucent rounded panels with hairline light

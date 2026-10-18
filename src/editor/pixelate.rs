@@ -11,6 +11,9 @@
 //! 3. **Quantise to the palette**, optionally with ordered dither so
 //!    gradients survive as patterns instead of banding.
 //!
+//! With [`Fit::Subject`] the backdrop is cut away first, at full size, and
+//! only the subject is shrunk, keeping its proportions.
+//!
 //! The same quantiser backs the "snap layer to palette" command.
 
 use super::color::Rgba;
@@ -18,6 +21,7 @@ use super::dither::bayer_threshold;
 use super::palette::Palette;
 use super::pixels::Pixels;
 use super::raster::contiguous_region;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// Shrinks `image` to `width × height`, giving each output pixel the colour
@@ -132,6 +136,22 @@ fn two_nearest(palette: &Palette, colour: Rgba) -> (Rgba, Rgba, f32) {
     }
 }
 
+/// How close to a corner's colour a pixel must be to count as backdrop.
+const BACKDROP_TOLERANCE: f32 = 0.08;
+
+/// How a picture is laid onto the canvas.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Fit {
+    /// The whole picture, stretched to the canvas.
+    #[default]
+    Canvas,
+    /// Only the subject, as large as fits with its proportions kept,
+    /// centred and standing on the bottom edge (where a sprite's feet go).
+    /// Always clears the backdrop, since that's how the subject is found.
+    Subject,
+}
+
 /// The whole pipeline, from a generated picture to a sprite-ready layer.
 pub fn pixelate(
     image: &Pixels,
@@ -142,8 +162,29 @@ pub fn pixelate(
     dither: bool,
 ) -> Pixels {
     let small = downscale_dominant(image, width, height);
-    let isolated = if clear_background { remove_background(&small, 0.08) } else { small };
+    let isolated = if clear_background { remove_background(&small, BACKDROP_TOLERANCE) } else { small };
     quantise(&isolated, palette, dither)
+}
+
+/// The pipeline for [`Fit::Subject`]. The backdrop is cleared before
+/// shrinking because at full size its edge is sharp; shrunk first, the
+/// subject's outline would be voted into the backdrop.
+pub fn pixelate_subject(image: &Pixels, width: u32, height: u32, palette: &Palette, dither: bool) -> Pixels {
+    let cut_out = remove_background(image, BACKDROP_TOLERANCE);
+    let mut canvas = Pixels::new(width, height);
+    let Some(bounds) = cut_out.opaque_bounds() else { return canvas };
+    let (fit_width, fit_height) = fit_inside((bounds.width, bounds.height), (width, height));
+    let subject = downscale_dominant(&cut_out.crop(bounds), fit_width, fit_height);
+    canvas.paste(&subject, ((width - fit_width) / 2) as i32, (height - fit_height) as i32);
+    quantise(&canvas, palette, dither)
+}
+
+/// The largest size with `subject`'s proportions that fits in `frame`,
+/// never smaller than one pixel a side.
+fn fit_inside(subject: (u32, u32), frame: (u32, u32)) -> (u32, u32) {
+    let scale = (frame.0 as f32 / subject.0 as f32).min(frame.1 as f32 / subject.1 as f32);
+    let side = |length: u32, limit: u32| ((length as f32 * scale).round() as u32).clamp(1, limit);
+    (side(subject.0, frame.0), side(subject.1, frame.1))
 }
 
 #[cfg(test)]
@@ -232,5 +273,21 @@ mod tests {
         assert_eq!((sprite.width(), sprite.height()), (32, 32));
         assert_eq!(sprite.get(0, 0), Rgba::TRANSPARENT);
         assert!(sprite.colours().iter().all(|c| c.is_transparent() || palette.colours.contains(c)));
+    }
+
+    #[test]
+    fn a_tall_subject_fits_the_height_and_is_centred() {
+        assert_eq!(fit_inside((50, 200), (32, 32)), (8, 32));
+    }
+
+    #[test]
+    fn a_hairline_subject_keeps_at_least_one_pixel() {
+        assert_eq!(fit_inside((1000, 1), (16, 16)), (16, 1));
+    }
+
+    #[test]
+    fn a_picture_that_is_all_backdrop_lands_as_an_empty_layer() {
+        let blank = Pixels::filled(64, 64, Rgba::WHITE);
+        assert!(pixelate_subject(&blank, 8, 8, &Palette::pico8(), false).is_blank());
     }
 }
