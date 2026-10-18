@@ -60,7 +60,9 @@ pub fn downscale_dominant(image: &Pixels, width: u32, height: u32) -> Pixels {
 }
 
 /// Clears the flat backdrop: every region touching a corner whose colour is
-/// within `tolerance` (Oklab distance) of that corner becomes transparent.
+/// within `tolerance` (Oklab distance) of that corner becomes transparent,
+/// and so does every large pocket of the same backdrop the subject closes
+/// off, like the gap between a creature's legs.
 pub fn remove_background(image: &Pixels, tolerance: f32) -> Pixels {
     let mut out = image.clone();
     let (w, h) = (image.width() as i32, image.height() as i32);
@@ -73,8 +75,35 @@ pub fn remove_background(image: &Pixels, tolerance: f32) -> Pixels {
         for (x, y) in contiguous_region(&similar, corner) {
             out.set(x, y, Rgba::TRANSPARENT);
         }
+        clear_enclosed_pockets(&mut out, backdrop, tolerance);
     }
     out
+}
+
+/// The smallest enclosed pocket of backdrop that counts as background, as a
+/// share of the picture. Smaller ones, like the glint in an eye, are
+/// usually the subject's own highlights.
+const SMALLEST_POCKET: f32 = 0.0025;
+
+fn clear_enclosed_pockets(image: &mut Pixels, backdrop: Rgba, tolerance: f32) {
+    let smallest = ((image.width() * image.height()) as f32 * SMALLEST_POCKET).ceil() as usize;
+    let similar = snap_similar(image, backdrop, tolerance);
+    let mut seen = vec![false; similar.colours().len()];
+    let index = |x: i32, y: i32| (y as u32 * similar.width() + x as u32) as usize;
+    for (x, y) in similar.bounds().points() {
+        if seen[index(x, y)] || similar.get(x, y) != backdrop {
+            continue;
+        }
+        let pocket = contiguous_region(&similar, (x, y));
+        for &(px, py) in &pocket {
+            seen[index(px, py)] = true;
+        }
+        if pocket.len() >= smallest {
+            for (px, py) in pocket {
+                image.set(px, py, Rgba::TRANSPARENT);
+            }
+        }
+    }
 }
 
 /// A copy where every colour close to `target` is replaced by `target`
@@ -261,6 +290,31 @@ mod tests {
         let cut_out = remove_background(&image, 0.05);
         assert_eq!(cut_out.get(0, 0), Rgba::TRANSPARENT);
         assert_eq!(cut_out.get(4, 4), Rgba::BLACK);
+    }
+
+    /// A red ring on white: the hole in the middle is backdrop the corner
+    /// flood can't reach, and the 2×2 white glint on the ring is part of
+    /// the subject.
+    fn ring_with_a_glint() -> Pixels {
+        let mut image = Pixels::filled(100, 100, Rgba::WHITE);
+        for (x, y) in Rect::new(10, 10, 80, 80).points() {
+            image.set(x, y, Rgba::rgb(220, 20, 40));
+        }
+        for (x, y) in Rect::new(30, 30, 40, 40).points() {
+            image.set(x, y, Rgba::WHITE);
+        }
+        for (x, y) in Rect::new(15, 15, 2, 2).points() {
+            image.set(x, y, Rgba::WHITE);
+        }
+        image
+    }
+
+    #[test]
+    fn background_removal_clears_large_enclosed_pockets_of_backdrop() {
+        let cut_out = remove_background(&ring_with_a_glint(), 0.05);
+        assert_eq!(cut_out.get(50, 50), Rgba::TRANSPARENT, "the hole is backdrop");
+        assert_eq!(cut_out.get(15, 15), Rgba::WHITE, "the glint is subject");
+        assert_eq!(cut_out.get(20, 20), Rgba::rgb(220, 20, 40));
     }
 
     #[test]

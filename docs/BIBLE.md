@@ -272,7 +272,9 @@ file.
 - Presets tuned for small pixel models and LoRAs (prompt suffixes, low step
   counts, small native sizes).
 - **Pixelise pipeline:** downscale to the canvas size by dominant colour per
-  block → optional background removal (flood from the corners) → quantise to
+  block → optional background removal (flood from the corners, plus any
+  large pocket of backdrop the subject closes off, like the gap between
+  legs; small ones such as an eye's glint stay) → quantise to
   the document palette (nearest in Oklab) with optional ordered dither. The
   result lands as a new layer.
 - **Fit to the subject:** instead of squashing the whole picture onto the
@@ -290,6 +292,9 @@ file.
 - Given a fake A1111 server returning a 256×256 two-colour image, when I
   generate into a 32×32 document with the PICO-8 palette, then a new layer
   appears whose pixels are all PICO-8 colours.
+- Given a red ring on white with a big white hole and a 2×2 white glint
+  on the ring, when the background is removed, then the hole is cleared
+  and the glint stays.
 - Given a 400×200 picture of a 200×50 red bar on white, when I fit it to
   the subject on a 32×32 canvas, then the bar is 32 wide and 8 tall and
   stands on the bottom row.
